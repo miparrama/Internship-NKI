@@ -1,0 +1,2416 @@
+---
+title: "Funtional profiling (Metawibele)"
+author: "Miguel Parra"
+date: "2022-11-07"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#Import libraries
+library ("ggplot2")
+library("readr")
+
+library ("tidyr")
+library ("ggrepel")
+library ("purrr")
+library ("vegan")
+library ("ape")
+library ("compositions")
+#library ("robcompositions")
+library ("ggfortify")
+library ("edgeR")
+library ("forcats")
+library ("ggsci")
+library ("umap")
+library ("ggpointdensity")
+library ("tibble")
+
+library ("topGO")
+library("dplyr")
+library ("ggpubr")
+library ("edgeR")
+library ("Maaslin2")
+library ("janitor")
+library ("stringr")
+
+
+```
+
+
+##Loading the data
+
+
+### Characterization outputs:
+```{r}
+### Characterize outputs: 
+annotation <- read_tsv("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_annotation.tsv")
+annotation_attribute <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/proteinfamilies_annotation.attribute_2.tsv") #Supplements the annotation information
+annotation_attribute <- annotation_attribute %>% rename (category = anotation)
+
+#annotation_attribute <- annotation_attribute %>% separate (col = AID, into = c ("familyID", "category"), sep = "__") # This takes long...
+abundance_prot_families <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv")
+abundance_prot_families <- abundance_prot_families %>% rename (familyID = ID)
+
+#Remove the samples that should be excluded (MSS, missing response, ...)
+abundance_prot_families <- abundance_prot_families %>% select (-setdiff( (abundance_prot_families %>% select (contains ("DRUP")) %>% colnames()), final_metadata$Sample))
+
+```
+
+### DRUP metadata
+```{r}
+drup_metadata <- read_csv ("/DATA/share/tom_masters/miguel/drup-gut-metadata.csv")
+final_metadata <- read_csv ("./filtered-metadata.csv")
+```
+
+
+### Path for saving the plots
+```{r}
+path_plots <- "/home/m.p.martinez/fun_profiling/plots/metawibele/run2"
+```
+
+
+```{r}
+final_metadata <- final_metadata %>% mutate (tumor_type = replace (tumor_type, tumor_type %in% c ("Oesphagus cancer", "Oesophaghus cancer"), "Oesophagus cancer" ))
+
+```
+
+
+
+
+### Prioritazion outputs
+```{r}
+
+### Prioritize outputs: 
+#prioritize_selected_sup_table <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_supervised_prioritization.rank.selected.table.tsv")
+#prioritize_selected_sup <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_supervised_prioritization.rank.selected.tsv")
+#prioritize_selected_unsup_table <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_unsupervised_prioritization.rank.selected.table.tsv")
+
+```
+
+
+
+
+
+##Exploratory data analysis. 
+
+```{r}
+#Number of protein clusters: 
+n_clusters <- n_distinct (annotation$familyID) #2659982
+
+#Mean number of proteins that form the clusters
+# 1.21 Most of the clusters are composed of only 1 predicted protein. 
+annotation_attribute %>% filter (key == "cluster_size") %>% mutate (value = as.numeric(value)) %>% summarise(mean = mean(value), sd = sd(value), min = min(value), max(value), n = n())
+
+annotation_attribute %>% filter (key == "cluster_size") %>% mutate (value = as.numeric (value)) %>% filter (value == 1) %>% nrow() /n_clusters
+
+annotation %>% distinct(method) %>% pull()
+
+```
+Most of the clusters (87%) are formed by 1 protein only. In line with Metawibele publication (2023587 predicted proteins in origin)
+
+
+### Taxonomy annotation
+```{r}
+annotation_taxonomy <- annotation %>% filter (method == "Taxonomy_annotation")
+
+annotation_taxonomy  %>% group_by (feature) %>% summarise (n = n(), freq = n()/n_clusters)
+
+annotation_taxonomy  %>% 
+  ggplot (aes (feature)) + geom_bar(aes (fill = feature), show.legend = FALSE) + scale_y_log10() + labs (y = "log(No.) of proteins families", x = "Taxonomic classification")
+
+annotation_taxonomy %>% filter (feature == "Unclassified") %>% nrow() / n_clusters
+
+
+## Most of the predicted proteins are unclassified 
+```
+Most of the predicted proteins are unclassified. (95%)
+
+This contrast with the paper of metawibele which shows that most of the proteins can be taxonomically classified. 
+
+###Pangenomes
+```{r}
+#Number of pangenomes predicted by MSPminer 
+annotation %>% filter (method == "MSPminer") %>% select (annotation) %>% distinct() %>% dim() # 1253
+
+#Number of protein families that are forming part of a pangenome
+annotation %>% filter (method == "MSPminer") %>% filter (annotation != "msp_unknown") %>%
+  group_by(method) %>% summarise (n_clusters = n(), per_clusters = round (n()/ n_clusters * 100, 3)) #31,42 % of the protein families belong to a pangenome... 
+
+#Distribution of number of protein families forming each mspminer pangenome
+annotation %>% filter (method == "MSPminer") %>% filter (annotation != "msp_unknown") %>% group_by(annotation) %>% summarise(n = n()) %>% 
+  ggplot(aes (x = n)) + geom_histogram (aes( fill = "#D16103" ), show.legend = FALSE)
+
+```
+
+1253 is the number of pangenomes generated by MSP miner. But 835,092 different protein clusters form part of these pangenomes
+
+
+
+### Homology
+```{r}
+annotation_uniref <- annotation %>% filter (method == "UniRef90") %>% select (-c (method,AID))
+annotation_uniref %>% head()
+
+annotation_uniref %>% filter (category == "UniRef90_characterization") %>% ggplot (aes (feature)) + geom_bar() + coord_flip()
+
+
+
+annotation_uniref %>% filter (category == "UniRef90_homology") %>% group_by(feature) %>% summarise(count = n())
+annotation_uniref %>% filter (category == "UniRef90_homology") %>%
+  ggplot (aes (feature)) + geom_bar(aes (fill = feature), show.legend = FALSE) +
+  labs (x = " Homology against UniRef90", y = "No. of protein families") +
+  scale_fill_manual (values = c ("#52854C", "#4E84C4", "#D16103"))
+
+annotation_uniref %>% filter (category == "UniRef90_homology") %>% group_by (feature) %>% summarise( count = n(), percentage = n()/n_clusters)
+#Most of the proteins have a strong uniref90 homology. 
+
+```
+Most of the proteins have a strong uniref90 homology.
+
+
+
+```{r}
+
+#Homology and abundance analysis. 
+homology_abun_per_sample <- annotation_uniref %>% filter (category == "UniRef90_homology") %>% select (familyID, feature) %>% left_join(abundance_prot_families)
+
+#Merge the two homology classifications. Strong homology = uniref90 characterize + uncharacterized. 
+homology_abun_per_sample3 <- annotation_uniref %>% filter (category == "UniRef90_characterization") %>% select (familyID, feature) %>% rename (feature2 = feature) %>% filter (feature2 %in% c ("UniRef90_unknown", "UniRef90_uncharacterized")) %>% right_join(homology_abun_per_sample) %>% mutate ( feature2 = replace_na(feature2, "UniRef90_characterized")) %>%  mutate (homology = case_when(
+  feature2 == "UniRef90_uncharacterized" & feature == "strong_homology" ~ "SU", 
+  feature2 == "UniRef90_characterized" & feature == "strong_homology" ~ "SC", 
+  feature2 == "UniRef90_unknown" & feature == "weak_homology" ~ "RH", 
+  feature2 == "UniRef90_unknown" & feature == "worse_homology" ~ "NH"
+)) %>% select (- c(feature2, feature)) %>% relocate (homology, .after = 1)
+
+
+#homology_abun_per_sample2 <- homology_abun_per_sample %>% group_by(feature) %>% summarize_at(vars(-1), sum, na.rm = TRUE)  %>% pivot_longer(, cols = -feature, names_to = "sample", values_to = "abundance")
+
+homology_abun_per_sample2 <- homology_abun_per_sample3 %>% group_by(homology) %>% summarize_at( vars(-1), sum, na.rm = TRUE)  %>% pivot_longer(, cols = -homology, names_to = "Sample", values_to = "abundance") %>% left_join((drup_metadata %>% select (c (Sample, Response))))
+
+
+
+# Stacked + percent
+ggplot(homology_abun_per_sample2, aes(fill=homology, y=abundance, x=Sample)) + 
+    geom_bar(position="fill", stat="identity", width = 1) + 
+  theme(axis.text.x  = element_blank()) + 
+  labs (y = "Abundance(%)", fill = "Homology") +
+  theme(text = element_text(size=14))
+ggsave ("abun_percent_homology_sample.png", path = path_plots)
+
+
+
+homology_abun_per_sample2 %>% filter (Response %in% c("Responder", "Non-responder")) %>% ggplot( aes(fill=homology, y=abundance, x=Sample, decreasing = TRUE)) + 
+    geom_bar(position="fill", stat="identity", width = 1) + 
+  theme(axis.text.x  = element_blank()) + 
+  labs (y = "Abundance(%)", fill = "Homology") + 
+  facet_grid( cols = vars(Response), scales="free_x") +
+  theme(text = element_text(size=16))
+
+ggsave ("abun_percent_homology_sample_facet.response.png", path = path_plots)
+
+
+
+
+
+cluster_mean_abun <- homology_abun_per_sample3 %>% select (contains ("DRUP")) %>% rowMeans()
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% mutate (mean_abun = cluster_mean_abun)
+
+## Distribution of mean abundance of protein families. 
+ggplot (homology_abun_per_sample3, aes (x = log(mean_abun), fill = homology, y = stat(count))) + geom_density (alpha=.3) + theme(text = element_text(size=16))
+
+
+ggsave ("mean_abundance_homology.png", path = path_plots)
+
+
+
+
+homology_abun_per_sample2 %>% group_by(Sample) %>% summarise (n= sum(abundance))
+
+
+```
+The relative abundance of protein families depending on their homology classification is very similar between samples (there is no distinctiction between responders and non responders)
+
+The distribution of protein families abundance given their homology classification shows that the protein families with strong homology (SC, SU) tend to have a higher abundance than the protein families with relative homology (RH) and no-homology (NH)
+
+
+Drop samples that should not be present in homology_per_sample3 dataframe
+```{r}
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% select (-setdiff( (homology_abun_per_sample3 %>% select (contains ("DRUP")) %>% colnames()), final_metadata$Sample))
+```
+
+
+
+```{r}
+#Number of proteins families per each 
+ggplot (homology_abun_per_sample3, aes (homology)) + geom_bar( aes(fill = homology)) + 
+  theme(text = element_text(size=16))
+
+### Plot the proportions as well. 
+ggsave ("count_homology.png", path = path_plots)
+
+
+#Proportions or each cluster by homology
+homology_abun_per_sample3 %>% group_by(homology) %>% summarise (per = round (100*n()/n_clusters, 2), n = n())
+
+
+
+```
+
+
+```{r}
+
+## Number of proteins forming the cluster depending on the homology...
+cluster_size <- annotation_attribute %>% filter (key == "cluster_size") 
+
+homology_abun_per_sample3["cluster_size"] <- cluster_size %>% mutate(value = as.numeric(value)) %>% pull(value)
+
+homology_abun_per_sample3 %>% group_by(homology) %>% summarise (mean = mean (cluster_size), max = max(cluster_size))
+
+```
+The mean number of proteins forming the clusters is similar among the different groups of clusters, Though NH clusters tend to be smaller, (less clusters bigger than 1). 
+
+
+
+
+*Mean prevalence*
+```{r}
+# Add prevalence to homology_abun_per_sample3
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join(., (annotation %>% filter( feature == "DNA_prevalence") %>% select (familyID, annotation) %>% rename (prevalence = annotation))) 
+
+#prevalence plot (against abundance...)
+homology_abun_per_sample3 %>% drop_na() %>% ggplot (aes (x = prevalence, y = log(mean_abun))) + geom_jitter(alpha = 0.05) + theme(text = element_text(size=14) , axis.text.x=element_blank())
+ggsave(file = "log_abun~prevalence.png", path = path_plots)
+
+homology_abun_per_sample3 %>%  drop_na() %>% mutate (prevalence = jitter (as.double(prevalence), factor = 2)) %>%  ggplot (aes (x = prevalence, y = log(mean_abun)), position = "jitter") + geom_hex(binwidth = c(0.01, 0.16), aes(fill = stat(count))) + facet_grid(rows = vars(homology)) + theme(text = element_text(size=14))
+ggsave(file="log.abun_prevalence_facet.homology.png", path = path_plots, width=6, height=8, dpi=300)
+
+#Density of prevalence
+homology_abun_per_sample3 %>%  drop_na() %>% mutate (prevalence = jitter (as.double(prevalence), factor = 2)) %>% ggplot (aes (x = prevalence, fill = homology,  y = stat(count))) + geom_density (alpha=.3) + theme(text = element_text(size=14))
+ggsave(file="density_prevalence.png", path = path_plots)
+
+
+#Make prevalence one depending on responden or non responders....
+
+```
+
+
+
+There is a correlation between the prevalence and the abundance of the protein families. 
+
+```{r}
+# Prevalence abundance difference per sample. 
+homology_abun_per_sample3 %>% drop_na() %>% select (c("familyID", "homology", "prevalence")) %>%
+  mutate (prevalence = as.double (prevalence)) %>% 
+  ggplot (aes (x = homology, y = prevalence, fill = homology)) + geom_boxplot( outlier.alpha = 0.1)  + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) )
+
+ggsave ("pravalence_homology.png", path = path_plots)
+
+my_comparisons = list (c("NH", "SC"), c("NH", "SU"), c("RH", "SC"), c ("RH", "SU"))
+
+homology_abun_per_sample3 %>% drop_na() %>% select (c("familyID", "homology", "prevalence")) %>%
+  mutate (prevalence = as.double (prevalence)) %>% 
+  ggplot (aes (x = homology, y = prevalence, fill = homology)) + geom_boxplot( outlier.alpha = 0.1)   + theme (text = element_text(size = 16)) + stat_compare_means(comparisons = my_comparisons, label = "p.signif" ) + ## Add statistical comparissons with ggpubr package.  
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) )
+
+ggsave ("pravalence_homology_pval.png", path = path_plots)
+
+```
+
+
+
+
+
+
+```{r}
+# There is a small percentage of proteins that don't have abunance available...
+homology_abun_per_sample3 %>% filter (is.na(DRUP01010212T1)) %>% dim(.) %>% .[1] / n_clusters * 100
+```
+1.31 % of the predicted protein families don't have abundance information (thus, are removed from the analysis). 
+
+
+```{r}
+
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>%  filter (prevalence != NaN)
+n_clusters2 <- n_clusters - as.double(homology_abun_per_sample3$prevalence) %>% is.na() %>% sum() #265101
+```
+Number of protein clusters after eliminating the ones that don't have information of the abundance and the prevalence = 2625101 
+
+
+
+
+distribution of protein lengths between the groups of protein families. 
+```{r}
+cluster_length <- annotation_attribute %>% filter (key == "rep_length") %>% select ( c("familyID", "value")) %>% rename (length = value) %>% mutate (length = as.numeric(length))
+
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join(cluster_length)
+
+homology_abun_per_sample3 %>% ggplot (aes (x = log(length), fill = homology, y = stat(count))) + geom_density(alpha=.3) + 
+ theme_bw() + theme (text = element_text(size = 16), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+ggsave ("protein_lenght_distribution.png", path = path_plots)
+
+
+homology_abun_per_sample3 %>% ggplot (aes (x = homology, y = log(length), fill = homology)) +  geom_boxplot( outlier.alpha = 0.1)   + theme (text = element_text(size = 16)) + 
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) )
+ggsave ("protein_lenght_distribution_boxplot.png", path = path_plots)
+
+my_comparisons = list (c("NH", "SC"), c("NH", "SU"), c("RH", "SC"), c ("SC", "SU"))
+homology_abun_per_sample3 %>% ggplot (aes (x = homology, y = log(length), fill = homology)) +  geom_boxplot( outlier.alpha = 0.1)   + theme (text = element_text(size = 16)) + stat_compare_means(comparisons = my_comparisons, label = "p.signif" ) + ## Add statistical comparissons with ggpubr package.  
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) )
+ggsave ("protein_lenght_distribution_boxplot_pval.png", path = path_plots)
+
+
+
+```
+
+It can be observed that the NH clusters have a smaller length compared with the other groups of proteins. 
+All the comparisons are significative (high sample size)
+
+
+###Number of clusters per sample
+```{r}
+
+#Number of clusters per sample and per homology
+homology_abun_per_sample3_long <- homology_abun_per_sample3 %>% pivot_longer(cols = contains ("DRUP"), names_to = "sampleId", values_to = "cpm")
+
+
+n_clusters_per_sample_per_homology <- homology_abun_per_sample3_long %>% filter (cpm > 0 ) %>% group_by(sampleId, homology) %>% summarise(n = n ())
+
+n_clusters_per_sample_per_homology %>% 
+  ggplot (aes (x = reorder (sampleId, n, decreasing = TRUE), y = n, fill = homology)) + 
+  geom_bar ( stat = "identity", width = 1) +
+  theme(axis.text.x  = element_blank(), text = element_text(size = 14)) +
+  labs (y = "# of protein clusters", fill = "Homology", x = "Sample")
+ggsave ("numb_clusters_homology_sample.png", path = path_plots)
+
+
+n_clusters_per_sample_per_homology <- n_clusters_per_sample_per_homology %>% inner_join(., (final_metadata %>% select (Sample, Response, timepoint) %>% rename (sampleId = Sample)))
+
+
+#Number of clusters per homology, per sample (grouped by response)
+n_clusters_per_sample_per_homology %>% 
+ggplot (aes (x = reorder (sampleId, n, decreasing = TRUE), y = n, fill = homology)) + 
+  geom_bar ( stat = "identity", width = 1) +
+  facet_wrap( ~ Response, scales = "free_x") +
+  theme(axis.text.x  = element_blank(), text = element_text(size = 14)) + 
+  labs (y = "# of protein clusters", fill = "Homology", x = "Sample")
+ggsave ("numb_clusters_homology_sample_response.png", path = path_plots)
+
+
+
+head (n_clusters_per_sample_per_homology)
+
+n_clusters_per_sample_per_homology %>% 
+  ggplot (aes (x = homology, y = n, fill = homology)) +
+  #geom_violin() + 
+  geom_boxplot() +
+  geom_jitter (alpha = 0.2) +
+  labs (y = "# of protein clusters") + 
+  facet_grid (timepoint ~ Response) + 
+  theme_bw() * 
+  theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text (size = 14))
+
+ggsave ("numb_clusters_homology_response_time.png", path = path_plots)
+
+
+
+#remove the long df: takes 30 gb of space. 
+rm (homology_abun_per_sample3_long)
+```
+The proportion of clusters by homology is mantained among samples. However the number of clusters detected per sample vary greatly. There are ones on which is extraordinarily low. 
+
+
+
+Number of protein clusters found in each sample: 
+```{r}
+n_clusters_per_sample <- n_clusters_per_sample_per_homology %>% group_by (sampleId) %>% summarise (sum = sum(n)) %>% rename (Sample = sampleId) %>% left_join (., (drup_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use")))) %>% rename (n_clusters = sum)
+
+
+#Per batch
+n_clusters_per_sample %>% ggplot (aes (x = Batch, y = n_clusters, fill = Batch)) + geom_violin() + geom_boxplot(width = 0.2) + geom_jitter (alpha = 0.2) + theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) ) + stat_compare_means( comparisons = list(c("BatchA", "BatchB")), label = "p.signif" )
+ggsave ("num_clusters_sample_batch.png", path = path_plots)
+  
+
+#Per ATB use
+n_clusters_per_sample %>% ggplot (aes (x = ATB_use, y = n_clusters, fill = ATB_use)) + geom_violin() + geom_boxplot(width = 0.2) + geom_jitter (alpha = 0.2)+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) ) + stat_compare_means (comparisons = list( c( "No", "Unknown"), c ("No", "Yes"), c("Unknown", "Yes")), label = "p.signif")
+ggsave ("num_clusters_sample_atb.png", path = path_plots)
+
+#Per time point
+n_clusters_per_sample %>% ggplot (aes (x = timepoint, y = n_clusters, fill = timepoint)) + geom_violin() + geom_boxplot(width = 0.2) + geom_jitter (alpha = 0.2)+ 
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) ) + stat_compare_means (comparisons = list( c( "T1", "T2"), c ("T1", "T3"), c("T2", "T3")), label = "p.signif")
+ggsave ("num_clusters_sample_timepoint.png", path = path_plots)
+
+
+#Per response
+n_clusters_per_sample %>% filter (!Response %in% c("MISSING", "NE")) %>%  ggplot (aes (x = Response, y = n_clusters, fill = Response)) + geom_violin() + geom_boxplot(width = 0.2) + geom_jitter (alpha = 0.2)+  labs (y = "# of clusters", x = "Response") + 
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) ) + stat_compare_means (comparisons = list( c( "Non-responder", "Responder")), label = "p.signif")
+ggsave ("num_clusters_sample_response.png", path = path_plots)
+
+```
+These variables don't explain why some samples have a significant reduction in the number of sam
+
+
+
+```{r}
+annotation_uniref %>% filter (category == "UniRef90_characterization") %>%
+  #filter (!c("UniRef90_uncharacterize", "UniRef90_unknown")) %>% 
+  group_by(feature) %>% summarise (n = n(), per = round (100*n()/n_clusters, 2))
+  #filter (feature == "UniRef90_PfamDomain") %>% 
+  #distinct(familyID) %>% nrow()
+  
+```
+More protein families with UniRef90_PfamDomain than StrongHomology...
+
+
+
+
+###Functial annotation exploration
+
+```{r}
+annotation %>% distinct(method) %>% pull()
+```
+
+
+
+
+
+*TMHMM/Phobius*. Transmembrane regions. 
+```{r}
+annotation %>% filter (method == "TMHMM/Phobius") %>% group_by(feature) %>% summarise (n =n(), percentage = round (100 * n() / n_clusters, digits = 3))
+```
+
+
+
+*Phobius* and *SignalP* are tools that identify signaling peptides in protein sequences. 
+SignalP uses deep neural networks, while Phobius is based in HMM. 
+```{r}
+#SignalP and Phobius identigy the signaling peptides. 
+annotation %>% filter (method == "SignalP/Phobius") %>% group_by(feature) %>% summarise (n =n(), percentage = round (100 * n() / n_clusters, digits = 3))
+##8.37% of the proteins clusters are predicted to have a signaling domain. 
+
+```
+
+
+
+
+*Domine* is a database of known and predicted protein domain (domain-domain) interactions. It contains interactions inferred from PDB entries, and those that are predicted by 13 different computational approaches using Pfam domain definitions.
+There is also information about the specific hits (DDI) with human proteins
+```{r}
+
+#DOMINE
+annotation %>% filter (method == "DOMINE") %>% group_by(feature) %>% summarise (n =n(), percentage = round (100 * n() / n_clusters, digits = 3))
+```
+Few proteins have this annotation... (0.4%). 
+
+
+*ExpAtlas* or Expression Atlas database provides information about gene expression levels from RNA-seq studies and Microarrays studies. 
+```{r}
+#ExpAtlas
+annotation %>% filter (method == "ExpAtlas") %>% group_by(feature) %>% summarise (n =n(), percentage = round (100 * n() / n_clusters, digits = 3))
+```
+The same protein families that have a Domine annotation also have a expression atlas annotation. 
+
+*SIFTS* 
+```{r}
+#SIFTS
+annotation %>% filter (method == "SIFTS") %>% group_by (feature) %>% summarise (n = n(), percentage = round (100 * n() / n_clusters, 3))
+```
+Again the same 10560 proteins... with this annotation. 
+
+
+
+*InterProScan* InterProScan combines multiple analysis: 
+```{r}
+annotation %>% filter (method == "InterProScan") %>% group_by(feature) %>% summarise (n =n(), percentage = round (100 * n() / n_clusters, digits = 3))
+```
+
+
+*PfamDomain* Database of protein families that include annotations. 
+
+```{r}
+annotation %>% filter (feature == "InterProScan_PfamDomain") %>% group_by(annotation) %>% summarise (n = n())
+```
+PF00004 --> ATPasa familiy 
+PF09847 --> Membrane protein of 12 TMs    
+
+
+
+*Pfam2GO* 
+```{r}
+annotation %>% filter (method == "Pfam2GO") %>% group_by(annotation) %>% summarise (n = n())
+```
+GO:0005524 --> ATP binding domain. 
+
+
+
+*Panther* (Protein Analysis Through Evolutionary relationships).
+```{r}
+annotation %>% filter (feature == "InterProScan_PANTHER") %>% group_by(annotation) %>% summarise (n = n())
+```
+PTHR23076 --> METALLOPROTEASE M41 FTSH (PTHR23076)
+--- No panther annotation here...
+
+
+*CDD* (Conserved Domain Database) is a protein annotation resource that consists of a collection of well-annotated multiple sequence alignment models for ancient domains and full-length protein
+```{r}
+annotation %>% filter (feature == "InterProScan_CDD") %>% group_by(annotation) %>% summarise (n =n())
+```
+cd00009 --> ATP binding site
+cd00958 --> Active site involved in Schiff base formation; forms covalent linkage with the product
+cd04242 --> Nucleotide binding site 
+
+*Coils* Prediction of coiled coil regions in proteins.
+```{r}
+annotation %>% filter (feature == "InterProScan_Coils") %>% group_by(annotation) %>% summarise (n =n(), p = round (n()/n_clusters * 100, 3))
+
+```
+
+
+*MobiDBLite*. Tool for the prediciton of intrinsically disordered proteins. 
+```{r}
+annotation %>% filter (feature == "InterProScan_MobiDBLite") 
+```
+
+
+*Gene 3D* Structural assignment for whole genes and genomes using the CATH domain structure database. 
+```{r}
+annotation %>% filter (feature == "InterProScan_Gene3D") %>% group_by(annotation) %>% summarise (n = n())
+
+```
+
+
+Addition of prevalence and proteins names to each cluster in homology_abun_per_sample3 df
+```{r}
+
+# Add prevalence per group (response and non response) to each protein cluster
+homology_abun_per_sample3 <- left_join (homology_abun_per_sample3, (annotation %>% filter (feature %in% c( "DNA-Non-responder_prevalence", "DNA-Responder_prevalence")) %>% 
+  group_by (familyID) %>%
+  distinct (feature, .keep_all = TRUE) %>% ungroup() %>% select (-c(category,method,AID)) %>% #Delete the repeated empty line.
+  pivot_wider (names_from = feature, values_from = annotation)))
+
+# Add protien names to each protein cluster
+homology_abun_per_sample3 <- left_join( homology_abun_per_sample3 , (annotation_attribute %>% filter (category == "UniRef90_homology" & key == "Protein_names") %>% select (familyID, value) %>% rename (protein_name = value)))
+```
+
+
+##Assembly quality assesment: 
+
+```{r}
+quast_report <- read_tsv("~/fun_profiling/quast_assembly/quast_megahit_assembly/transposed_report.tsv")
+
+
+#N50 plot: 
+quast_report %>% ggplot (aes (y = N50)) +
+  geom_boxplot() + 
+  theme_bw() + 
+  theme (
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_blank(), 
+    panel.border = element_blank(), 
+    axis.line = element_line(color = "black"),
+    text = element_text(size = 16),
+    axis.text.x = element_blank()
+  )
+
+#GC content plot: 
+quast_report %>% ggplot (aes (y = `GC (%)`)) +
+  geom_boxplot() + 
+  theme_bw() + 
+  theme (
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_blank(), 
+    panel.border = element_blank(), 
+    axis.line = element_line(color = "black"),
+    text = element_text(size = 16),
+    axis.text.x = element_blank()
+  )
+
+#Total length: 
+quast_report %>% ggplot (aes (y = `Total length`)) +
+  geom_boxplot() + 
+  theme_bw() + 
+  ylab ("Total length assemblies (pb)")+
+  theme (
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_blank(), 
+    panel.border = element_blank(), 
+    axis.line = element_line(color = "black"),
+    text = element_text(size = 16),
+    axis.text.x = element_blank()
+  )
+
+
+quast_report <- quast_report %>% select (Assembly, `Total length`, N50, `GC (%)`) %>% rename (sampleId = Assembly) %>% mutate (sampleId = str_replace(sampleId, pattern = ".contigs", replacement = "")) %>% inner_join(., (n_clusters_per_sample_per_homology %>% group_by (sampleId) %>% summarize (n_clusters = sum(n)))) %>% left_join(., (final_metadata %>% select (Sample, Response, ATB_use, timepoint) %>% rename (sampleId = Sample)))
+  
+quast_report
+
+quast_report %>% 
+  ggplot (aes (x = `Total length`/10e6, y = n_clusters)) +
+  geom_point(size = 2, aes (color = Response, shape = timepoint)) + 
+  geom_smooth(method = "lm", size = 0.5) +
+  stat_cor(label.x = 0, label.y = 9e5) +
+  theme_bw() +
+  xlab("Assembly size (Mbp)") + 
+  ylab("# protein families") +
+  theme (
+    panel.border = element_rect(color = "black"), 
+    #panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    #axis.line = element_line(color = "black"), 
+    text = element_text(size = 16)
+  ) 
+
+ggsave("correlation_nfamilies_assemblysize.png", path = path_plots) 
+
+
+```
+
+```{r}
+fastq_stats <- read_delim("~/fun_profiling/quast_assembly/seqkit_stats_fastq.tsv",  )
+
+head (fastq_stats)
+
+```
+
+
+
+
+plot the assembly length agains the total length of the sort read sequences. 
+
+
+
+##Comparisson with Humman3: 
+
+Loading of the Humman3 data
+```{r}
+#Loading of the unireff dataframe: 
+humman_uniref <- read_tsv("/DATA/share/tom_masters/miguel/stratification/gene_families_unstratified.txt")
+
+metawibele_samples <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv",n_max = 2)
+metawibele_samples <- metawibele_samples %>% select (contains("DRUP")) %>% colnames()
+
+
+#Reduce the uniref dataframe only to the samples that were analyzed with metawibele: 
+humman_uniref <- humman_uniref %>% rename_with(.cols = contains ("DRUP"), .fn = function(x){str_replace(x, pattern = "_Abundance-RPKs", replacement = "")})
+humman_uniref <- humman_uniref %>% select (`# Gene Family`, metawibele_samples)
+
+
+##Comparisson of the differences number of uniref annotations: 
+
+uniref_metawibele <- annotation_uniref %>% filter (feature %in% c("strong_homology", "weak_homology") ) %>% pull(annotation)
+uniref_humman <- humman_uniref[-1,] %>% pull (`# Gene Family`)
+
+# library
+library(VennDiagram)
+ 
+#Make the plot
+venn.diagram(
+  x = list(
+    uniref_metawibele,
+    uniref_humman
+    ),
+  category.names = c("Metawibele", "Humman3"),
+  filename = "VennDiagram.png", 
+          lwd = 1,
+          col=c("#440154ff", '#21908dff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3)),
+          cex = 1.3,
+          fontfamily = "sans",
+          print.mode=c("raw","percent"),
+          cat.cex = 1.5,
+          cat.default.pos = "outer",
+          cat.pos = c(0, 0),
+          cat.dist = c(0.055, 0.055),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff'),
+          #rotation = 1
+  
+)
+
+
+
+### Make linear regression of the proteins that they have in common: 
+
+
+uniref_common <- intersect (uniref_humman, uniref_metawibele)
+uniref_common %>% length()
+
+humman_uniref$mean_abundance <- humman_uniref %>% select (contains ("DRUP")) %>% rowMeans()
+
+homology_abun_per_sample3 %>% select (-contains("DRUP")) %>% colnames()
+
+
+
+homology_abun_per_sample3 <- annotation_uniref %>% filter (feature %in% c("strong_homology", "weak_homology")) %>% select (familyID, annotation) %>% rename(uniref_id)
+
+## Make the metawibele dataframe with all the samples analyzed in metawibele + the unireff annotation to the correspondent samples)
+metawibele_uniref <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv")
+metawibele_uniref$mean_abun <- metawibele_uniref %>% select (contains ("DRUP")) %>% rowMeans() 
+
+
+metawibele_uniref <- metawibele_uniref %>% 
+  rename (familyID = ID) %>% 
+  select (familyID, mean_abun) %>%
+  left_join(.,
+            (annotation_uniref %>%
+                 filter (
+                   feature %in% c("strong_homology", "weak_homology")
+                   ) %>% 
+                 select(familyID, annotation) %>% 
+                 rename (uniref_id = annotation)
+             )
+  )
+
+
+humman_uniref <- humman_uniref %>% rename(uniref_id = `# Gene Family`) %>% select (uniref_id, mean_abundance) %>% .[-1,]
+
+
+
+humman_uniref %>% filter (uniref_id %in% uniref_common) %>% rename (mean_abundance_humman = mean_abundance ) %>% left_join(., metawibele_uniref) %>% 
+  filter (mean_abundance_humman > 0) %>% 
+  ggplot (aes(x = log10(mean_abundance_humman), y = log10(mean_abun))) + 
+  geom_point(size = 0.2) + 
+  geom_smooth(method = "lm") + 
+  xlab ("log10 Humann3 mean abundance") + 
+  ylab ("log10 Metawibele mean abundance") +
+  stat_cor() +
+  theme_bw() + 
+  theme(
+    panel.border = element_rect (color = "black"), 
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_blank(),
+    text = element_text (size = 16)
+  )
+
+ggsave("coor_abundance_humman_metawibele.png", path = path_plots)
+
+```
+
+
+
+
+
+
+## Differential abundance analysis
+```{r}
+
+# Generate abundance and log Fold change table. 
+abundance_df <- annotation_attribute %>% filter (category %in% c("MaAsLin2_DA", "UniRef90_homology"), key %in% c("qvalue", "log(FC)", "Protein_names")) %>% select (-TID) %>% select(-category)  %>% pivot_wider (names_from = key, values_from = value)
+abundance_df <- abundance_df %>% rename( log_FC = `log(FC)`)  %>% mutate (qvalue = as.numeric(qvalue), log_FC = as.numeric(log_FC))
+
+# Nas in qvalue and log(FC) are protein families are not present in one of the conditions. 
+abundance_df <- abundance_df %>% drop_na (!Protein_names)
+
+abundance_df <- abundance_df %>% left_join(., (homology_abun_per_sample3 %>% select (c("familyID", "DNA-Non-responder_prevalence", "DNA-Responder_prevalence"))))
+
+#Filter by minimun of 20% prevalence in both groups. 
+clusters_min_prevalence <- annotation %>% filter (feature %in% c( "DNA-Non-responder_prevalence", "DNA-Responder_prevalence")) %>% 
+  group_by (familyID) %>%
+  distinct (feature, .keep_all = TRUE) %>% ungroup() %>% select (-c(category,method,AID)) %>% #Delete the repeated empty line.
+  pivot_wider (names_from = feature, values_from = annotation) %>%
+  filter(`DNA-Non-responder_prevalence` > 0.2 | `DNA-Responder_prevalence` > 0.2) #Threshold of prevalence
+
+#Protein clusters that pass the prevalence threshold and have a significative pvalue after multiple hyphotesis testing correction. 
+abundance_df %>% 
+  filter (familyID %in% (clusters_min_prevalence %>% pull(familyID))) %>% filter (qvalue <= 0.05) %>% arrange (qvalue)
+
+abundance_df %>% filter(qvalue <= 0.05) %>% arrange (qvalue)
+
+```
+Only two protein clusters are signinficative associated....
+
+
+
+
+###Volcano maaslin
+Volcano plot of the Maaslin DA. 
+```{r}
+#Volcano plot XD
+p1 <- abundance_df %>% 
+  #filter (familyID %in% (clusters_min_prevalence %>% pull(familyID))) %>%
+  add_column(color = ifelse (.$qvalue <= 0.05, "S", "NS")) %>% 
+  drop_na (!Protein_names) %>% 
+  ggplot(aes ( log_FC, -log(qvalue,10), color = color)) + # -log10 conversion  
+  geom_point(size = 2/5) +
+  xlab(expression("log"[2]*"FC")) + 
+  ylab(expression("-log"[10]*"FDR")) +
+  theme(text = element_text(size=14)) +
+  scale_color_manual (values = c("S" = "Red", "NS" = "Black"))
+p1
+```
+
+Volcano plot of proteins families with a prevalence > 0.2 in at least one group. 
+
+The volcano plot is not very convincing (maybe be because is a linear mixed model?) 
+
+
+
+```{r}
+#Volcano plot
+p3 <- abundance_df %>% 
+  filter (familyID %in% (clusters_min_prevalence %>% pull(familyID))) %>%
+  drop_na (!Protein_names) %>% 
+  ggplot(aes ( log_FC, -log(qvalue,10))) + # -log10 conversion  
+  geom_point(size = 2/5, show.legend = FALSE) +
+  xlab(expression("log"[2]*"FC")) + 
+  ylab(expression("-log"[10]*"FDR")) +
+  theme(text = element_text(size=14)) +
+  geom_point( data = . %>% filter (qvalue <= 0.05), aes (color = "Red"), show.legend = FALSE)+
+  geom_text_repel(data = . %>% filter (qvalue <= 0.05), 
+                  aes (label = Protein_names, color = "Red"), show.legend = FALSE, size = 3.5, box.padding = 1.2) +
+  coord_cartesian( xlim = c (-7,7), ylim = c(0, 2.5)) + theme_bw() +
+  theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+p3
+ggsave("volcanoplot_maaslin_freqfilter0.2.png", path = path_plots)
+```
+
+
+
+
+```{r}
+
+abundance_prot_families %>% select (-familyID) %>% colSums() ## To many numbers to be added ?
+# The total number of occurance of proteins is very similar between samples. Min=96e+05, Max=99e+05
+
+
+
+# Number or proteins families per sample: 
+nprot_families_per_sample <- abundance_prot_families %>% summarise_all(funs(sum(. > 0)))
+
+# Selects only the samples that where filtered. (only responders and non-responders). 
+nprot_families_per_sample2 <- nprot_families_per_sample %>% select (final_metadata $Sample) %>% t() %>% as_tibble(column_name = "Number_prot_clusters")
+nprot_families_per_sample2 <- nprot_families_per_sample2 %>% add_column ( Sample =(nprot_families_per_sample %>% select (final_metadata $Sample) %>% colnames()), .before = 1) 
+
+nprot_families_per_sample2 <- rename (nprot_families_per_sample2, N_prots = V1)
+ 
+nprot_families_per_sample2 <- nprot_families_per_sample2 %>% left_join (., (final_metadata %>% select (c("Sample", "Response"))))
+
+p <- ggplot(nprot_families_per_sample2, aes (x = Response, y = N_prots)) +
+  geom_violin() +
+  geom_jitter() +
+  ylab("Number protein clusters") + 
+  xlab ("") + 
+  theme(text = element_text (size = 16))
+  
+p
+ggsave("proteinclusternumber_response.png", path = path_plots)
+
+
+
+
+
+
+```
+
+###Rarefracion analysis:
+```{r}
+abundance_prot_families_mt <- abundance_prot_families %>% column_to_rownames(var = "familyID") %>%  select (final_metadata$Sample) %>% as.matrix() 
+
+rarecurve <- rarecurve(round(t(abundance_prot_families_mt)), step = 10000, label = F, tidy = TRUE)
+
+rarecurve <- rarecurve %>% rename (Sample_Size = Sample, Sample = Site) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId")))) 
+
+
+
+## Rarecurve plot
+rarecurve_plot <- rarecurve %>% ggplot(aes (x = Sample_Size, y = Species, color = Response)) + 
+  geom_line(aes (group = Sample), alpha = 0.3) +
+  # geom_smooth (aes (group = Response) , size = 2 , method = "loess")
+  geom_smooth (data=rarecurve %>% filter (Sample_Size < 960002) %>% group_by(Response,Sample_Size) %>% summarise (mean = mean (Species), sd = sd(Species)),
+               aes (x = Sample_Size, y = mean, color = Response, ymin = mean - sd, ymax = mean + sd), stat = "identity", se = FALSE)
+rarecurve_plot
+
+```
+
+
+### PCoA
+
+First applying directly the Bray curtis dissimilarity and plottiing the first two PCoA. 
+```{r}
+
+bray_distance <- vegdist (t(abundance_prot_families_mt))
+pcoa <- pcoa(bray_distance)
+
+pcoa_plot <- pcoa$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  xlab (paste0("PCo1 (",round(pcoa$values[1,1], 2),"%)"))+
+  ylab (paste0("PCo2 (",round(pcoa$values[2,1], 2),"%)")) +
+  ggtitle ("PCoA protein clusters abundance")
+pcoa_plot
+```
+
+
+
+Applying Log Centered Ration normalization to the data. 
+```{r}
+abundance_prot_families_mt_clr <- clr (t(abundance_prot_families_mt))
+#euclidean <- vegdist (t(abundance_prot_families_mt_clr))
+
+pca_abundance <- prcomp (abundance_prot_families_mt_clr)
+
+
+#pca_plot <- autoplot (pca_abundance, data = abun_prot_fam_clr_df, color = "Response")
+
+
+
+PCs_abundance <- pca_abundance$x %>% as_tibble() %>%  add_column(Sample = rownames(pca_abundance$x), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use"))))  %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+
+PCs_12_mean_sample <- PCs_abundance %>% group_by(patientId) %>% summarise (x = mean(PC1), y = mean (PC2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+PCs_abundance <- PCs_abundance %>% left_join (., PCs_12_mean_sample)
+
+
+#Response
+pca_plot1 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = Response)) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("PCA protein clusters abundance") +
+  theme(text = element_text(size=12))
+
+#Timepoint
+pca_plot2 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = timepoint)) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("PCA protein clusters abundance") +
+  theme(text = element_text(size=12))
+
+#Batch
+pca_plot3 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = Batch)) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("PCA protein clusters abundance")+
+  theme(text = element_text(size=12))
+
+#Tumor_type
+pca_plot4 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = tumor_type)) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  theme(text = element_text(size=12))
+
+#Patient ID
+pca_plot5 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = PCs_12_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = PC1, yend = PC2, color = patientId), show.legend = FALSE, alpha = 0.4) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  theme(text = element_text(size=12))
+
+#Antibiotics use
+pca_plot6 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = ATB_use)) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  theme(text = element_text(size=12))
+
+#Clinical Benefit
+pca_plot7 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = CB)) +
+  xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  theme(text = element_text(size=12))
+
+
+pca_plot1
+ggsave("pca_abundance_response.png", path = path_plots, height = 4, width = 6)
+pca_plot2
+ggsave("pca_abundance_timepoint.png", path = path_plots, height = 4, width = 6)
+pca_plot3
+ggsave("pca_abundance_batch.png", path = path_plots, height = 4, width = 6)
+pca_plot4
+ggsave("pca_abundance_tumortype.png", path = path_plots, height = 4, width = 6)
+pca_plot5
+ggsave("pca_abundance_patientid.png", path = path_plots, height = 4, width = 6)
+pca_plot6
+ggsave("pca_abundance_antibiotics.png", path = path_plots, height = 4, width = 6)
+pca_plot7
+ggsave("pca_abundance_cb.png", path = path_plots, height = 4, width = 6)
+
+
+```
+
+
+###UMAPS
+```{r}
+
+#Calculation of the UMAP
+umap_abundance <- umap (as.matrix(abundance_prot_families_mt_clr))
+
+#Generate table with UMAP1 and 2 with other variables for plotting. 
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename(UMAP1="V1",UMAP2="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% left_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) %>% mutate (, Id_num = as.numeric(factor(.$patientId)))
+
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Timepoint
+umap_plot2 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = timepoint)) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Batch
+umap_plot3 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Batch)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Tumor_type
+umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = tumor_type)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Clinical Benefit
+umap_plot7 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = CB)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+path_umaps_plots <- "/home/m.p.martinez/fun_profiling/plots/metawibele/run2/umaps"
+
+umap_plot1
+ggsave("umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot2
+ggsave("umap_abundance_timepoint.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot3
+ggsave("umap_abundance_batch.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot4
+ggsave("umap_abundance_tumortype.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot7
+ggsave("umap_abundance_cb.png", path = path_umaps_plots, height = 4, width = 6)
+
+```
+
+
+```{r}
+## Time drive based on ATB for last UMAP. 
+
+#Umap with line joining patients at different timepoints colured depending on the antibiotic use. 
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use %in% c("Yes", "Unknown")), "Antibioitic / unknown use", "no_antibiotic_use"))
+
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+ggsave("umap_abundance_atb_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+```
+
+
+
+
+*UMAP* using protein abundance based on the homology classification. 
+
+####- No homology: 
+```{r}
+
+#Filter abundance for only protein clusters with no homology. 
+abundance_prot_nh <- homology_abun_per_sample3 %>% filter (homology == "NH") %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+
+
+umap_abundance_nh <- umap (as.matrix(abundance_prot_nh))
+
+
+umap_df_nh <- umap_abundance_nh$layout %>% as_tibble() %>% rename ("UMAP1" = "V1", "UMAP2" = "V2") %>% add_column (Sample = rownames (umap_abundance_nh$layout), .before = 1) %>% inner_join (., (final_metadata %>% select (c ("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use"))))
+umap_mean_sample_nh <- umap_df_nh %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df_nh <- umap_df_nh %>% left_join (., umap_mean_sample_nh)
+
+#Response
+umap_plot1 <- umap_df_nh %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme(text = element_text(size=12))
+
+
+#Patient ID
+umap_plot5 <- umap_df_nh %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample_nh, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) 
+  #theme(text = element_text(size=12))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df_nh %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme(text = element_text(size=12))
+
+
+
+umap_plot1
+ggsave("NH-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("NH-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("NH-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+
+```
+
+
+####-Remote homology
+Making the UMAP only with the clusters of proteins with Remote homology. 
+```{r}
+#Filter for remote homology
+abundance_prot_homology_filtered <- homology_abun_per_sample3 %>% filter (homology == "RH") %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme(text = element_text(size=12))
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) 
+  #theme(text = element_text(size=12))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme(text = element_text(size=12))
+
+
+
+umap_plot1
+ggsave("RH-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("RH-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("RH-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+```
+
+
+####-Strong homology
+Strong homology. 
+```{r}
+#Filter for strong homology
+abundance_prot_homology_filtered <- homology_abun_per_sample3 %>% filter (homology %in% c ("SC", "SU")) %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4)+
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+umap_plot1
+ggsave("SH-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("SH-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("SH-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+#Patient drive over time based on antibiotic use
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+ggsave("SH-umap_abundance_atb_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+```
+
+
+
+
+```{r}
+#Patient ID
+umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+```
+
+
+
+
+
+
+####-High prevalence
+*UMAP* only for the proteins with high prevalence (>0.3)
+
+```{r}
+#Filter for high prevalence
+abundance_prot_homology_filtered <- homology_abun_per_sample3  %>% mutate (prevalence = as.double(prevalence)) %>% filter (prevalence >= 0.25) %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4)+ 
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+
+umap_plot1
+ggsave("HPrevalence-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("HPrevalence-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("HPrevalence-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+#Patient drive over time based on antibiotic use
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+ggsave("HPrevalence-umap_abundance_atb_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+#Patient drive over time based on response
+umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE, aes(color = Response)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+ggsave("HPrevalence-umap_abundance_response_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+```
+
+
+
+
+####-Low prevalence
+*UMAP* only for the proteins with low prevalence (<0.15)
+
+```{r}
+#Filter for high prevalence
+abundance_prot_homology_filtered <- homology_abun_per_sample3  %>% mutate (prevalence = as.double(prevalence)) %>% filter (prevalence <= 0.15) %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4)+ 
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+umap_plot1
+ggsave("LPrevalence-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("LPrevalence-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("LPrevalence-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+#Patient drive over time based on antibiotic use
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+
+ggsave("LPrevalence-umap_abundance_atb_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+#Patient drive over time based on response
+umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = FALSE, aes(color = Response)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+
+ggsave("LPrevalence-umap_abundance_response_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+```
+
+
+
+
+
+
+
+
+
+30/01/2023----------------- 
+
+Name assignations are a bit confusion here. 
+
+
+####-Prevalence filter
+UMAPs with the protein clusters filtered by prevalence 
+Selection of clusters by prevalence: 
+```{r}
+
+#Select clusters that are only present in 50% sampels in one of the groups or >30% in both groups.
+abun_per_sample3_prev_filtered <- homology_abun_per_sample3 %>% filter ((`DNA-Non-responder_prevalence` > 0.5 | `DNA-Responder_prevalence` > 0.5) | (`DNA-Non-responder_prevalence` > 0.3 & `DNA-Responder_prevalence` > 0.3)) 
+dim (abun_per_sample3_prev_filtered)
+
+
+abun_per_sample3_prev_filtered %>% ggplot(aes (x = homology)) + geom_bar(aes(fill = homology))
+
+```
+
+
+```{r}
+#Filter abundance for only protein clusters with no homology. 
+abundance_prot_nh <- abun_per_sample3_prev_filtered %>%  column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+
+
+umap_abundance_nh <- umap (as.matrix(abundance_prot_nh))
+
+
+umap_df_nh <- umap_abundance_nh$layout %>% as_tibble() %>% rename ("UMAP1" = "V1", "UMAP2" = "V2") %>% add_column (Sample = rownames (umap_abundance_nh$layout), .before = 1) %>% inner_join (., (final_metadata %>% select (c ("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use"))))
+umap_mean_sample_nh <- umap_df_nh %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df_nh <- umap_df_nh %>% left_join (., umap_mean_sample_nh)
+
+#Response
+umap_plot1 <- umap_df_nh %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme(text = element_text(size=12))
+
+
+#Patient ID
+umap_plot5 <- umap_df_nh %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample_nh, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) 
+  #theme(text = element_text(size=12))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df_nh %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme(text = element_text(size=12))
+
+
+
+umap_plot1
+umap_plot5
+umap_plot6
+```
+
+
+
+
+####-Only T1
+
+```{r}
+#Filter for high prevalence
+abundance_prot_homology_filtered <- homology_abun_per_sample3 %>% column_to_rownames("familyID") %>% select ((final_metadata %>% filter (timepoint == "T1") %>% pull (Sample))) %>% as.matrix() %>% t() %>% clr()
+
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4)+ 
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+umap_plot1
+ggsave("T1revalence-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("T1revalence-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("T1revalence-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+```
+
+
+
+####-Only T2
+
+```{r}
+#Filter for high prevalence
+abundance_prot_homology_filtered <- homology_abun_per_sample3 %>% column_to_rownames("familyID") %>% select ((final_metadata %>% filter (timepoint == "T2") %>% pull (Sample))) %>% as.matrix() %>% t() %>% clr()
+
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4)+ 
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+umap_plot1
+ggsave("T2-umap_abundance_response.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot5
+ggsave("T2-umap_abundance_patientid.png", path = path_umaps_plots, height = 4, width = 6)
+umap_plot6
+ggsave("T2-umap_abundance_antibiotics.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+```
+
+
+
+## Prioritazion outputs
+```{r}
+
+### Prioritize outputs: 
+#prioritize_selected_sup_table <- read_tsv("/home/m.p.martinez/fun_profiling/metawibele/output/run2/prioritization.1/metawibele_supervised_prioritization.rank.selected.table.tsv")
+prioritize_selected_sup <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/prioritization.1/metawibele_supervised_prioritization.rank.selected.tsv")
+#prioritize_selected_unsup_table <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_unsupervised_prioritization.rank.selected.table.tsv")
+
+```
+
+
+Creation of a new abundace df with the abundance CLR normalized
+```{r}
+
+#Same as homology abundace data frame but with CLR normalized abundance data
+homology_abun_per_sample4 <- homology_abun_per_sample3 %>% select (! contains ("DRUP0"))
+
+homology_abun_per_sample4 <- left_join( homology_abun_per_sample4, (t(abundance_prot_families_mt_clr) %>% as_tibble(rownames = NA) %>% rownames_to_column() %>% rename (familyID = rowname)))
+
+homology_abun_per_sample4 <- left_join (homology_abun_per_sample4, (annotation %>% filter (feature == "MSPminer_MSP") %>% select (c ("familyID", "annotation")) %>% rename (pangenome = annotation) ))
+
+
+```
+
+
+
+### Heatmaps prioritization
+
+```{r}
+library ("ComplexHeatmap")
+library ("tidyHeatmap")
+```
+
+####Heatmap top 30 supervised
+```{r}
+
+
+#Select the top 30 protein families prioritized...
+familyID_prior_sup <- prioritize_selected_sup %>% head (n = 30) %>% separate (col = familyID, into = c ("familyID", "category"), sep = "\\|") %>% pull (familyID)
+
+
+#Construction of the heatmap df
+heatmap_df <- homology_abun_per_sample4 %>%
+  filter (familyID %in% familyID_prior_sup) %>%
+  select (-setdiff( (homology_abun_per_sample4 %>%
+                       select (contains ("DRUP")) %>% colnames()), final_metadata$Sample)) %>%
+  pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "LCR") %>%
+  left_join(., (final_metadata %>%
+                  select (Sample, Response, timepoint))) %>%
+  replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>%
+  rename (TM_domain = denovo_transmembrane, Signaling_domain = denovo_signaling) %>%
+  mutate (TM_domain = replace (TM_domain, TM_domain == "Denovo_transmembrane", "Yes"), Signaling_domain = replace (Signaling_domain, Signaling_domain == "Denovo_signaling", "Yes")) 
+
+
+#Construction of the heatmap
+heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%  group_by (Response) %>%
+  heatmap (`Protein family`, Sample, LCR,
+           scale = "row",
+           #show_row_dend = FALSE,
+           show_column_dend = FALSE,
+           show_column_names = FALSE,
+           #palette_grouping = list(c ("black", "grey30")),
+           heatmap_width = unit(10, "npc"),
+           heatmap_height = unit (15, "npc"),
+           row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
+  annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
+  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response) %>% 
+  as_ComplexHeatmap() %>%
+    ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+
+
+
+
+```
+
+```{r}
+heatmap_df <- homology_abun_per_sample3 %>% filter (familyID %in% familyID_prior_sup) %>% pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "cpm") %>% left_join(., (final_metadata %>% select (Sample, Response, timepoint)))
+
+
+
+#Construction of the heatmap
+heatmap_df %>% group_by (Response) %>%  heatmap (familyID, Sample, cpm, scale = "row",  show_row_dend = FALSE, show_column_dend = FALSE,
+                                                 show_column_names = FALSE,
+                                                 palette_grouping = list(c ("black", "grey30")),
+                                                 heatmap_width = unit(10, "npc"),
+                                                 heatmap_height = unit (15, "npc"), 
+                                                 row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>% annotation_tile(homology) %>% annotation_tile (timepoint) %>% as_ComplexHeatmap() 
+```
+
+
+
+Take a look to the distribution of abundance for each protein clutsers in each sample (seems very variable)??
+
+Add new tile with transmebrane/signaling yes or no. 
+
+
+
+####Haetmap strong homology
+Heatmap but only for the most prioritized protein clusters with strong homology (clusters that are annotated.)
+```{r}
+
+#Select top 30 clusters with SC homology (with annotations)
+familyID_prior_sup <- prioritize_selected_sup  %>% separate (col = familyID, into = c ("familyID", "category"), sep = "\\|") 
+familyID_prior_sup <- left_join (familyID_prior_sup, (homology_abun_per_sample4 %>% select (c ("familyID", "homology")))) %>% filter (homology == "SC") %>% head(30) %>% pull(familyID) 
+
+#Construction of the heatmap df
+  #Selection only of the top results. 
+heatmap_df <- homology_abun_per_sample4 %>% filter (familyID %in% familyID_prior_sup) %>% pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "LCR") %>% left_join(., (final_metadata  %>% select (Sample, Response)))
+
+
+#Construction of the heatmap
+heatmap_df %>% group_by (Response) %>%  heatmap (familyID, Sample, LCR, scale = "row", 
+                                                 show_row_dend = FALSE, show_column_dend = FALSE,
+                                                 show_column_names = FALSE,
+                                                 palette_grouping = list(c ("black", "grey30")),
+                                                 heatmap_width = unit(10, "npc"),
+                                                 heatmap_height = unit (15, "npc"),
+                                                 row_names_max_width = unit (10, "cm"),
+                                                 row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>% 
+  as_ComplexHeatmap() %>% ComplexHeatmap::draw(heatmap_legend_side = "left"   )
+
+```
+
+```{r}
+
+```
+
+
+
+
+
+##Satatistical analysis: Limma
+```{r}
+
+colnames (abundance_prot_families_mt)
+PCs_abundance %>% pull (Sample) %>% factor ()
+
+plotMDS (abundance_prot_families_mt, col = as.numeric(factor(PCs_abundance$Response)))
+plotMDS( abundance_prot_families_mt, col = as.numeric (factor (PCs_abundance$Response)), top = 1000, gene.selection = "common")
+
+```
+?? meaning of this compared with the PCA??.. Is PCoA using the distance between samples only of the "top" n genes. The top genes in this case with largest standard variation. 
+
+
+
+
+### ~reponse + tumor_type
+
+Statistical analysis filtering the protein families by abundance and by annotation (only of protein families SC or with predicted TM or signaling domains)
+```{r}
+
+#Samples analyzed  
+samples <- abundance_prot_families_mt %>% colnames() %>% as.factor()
+
+response_group <- tibble (Sample = colnames (abundance_prot_families_mt)) %>% inner_join(., (final_metadata %>% select (Sample, Response))) %>% mutate (Response = make.names (Response)) %>% pull(Response) %>% as.factor()
+
+timepoint_group <- tibble (Sample = colnames (abundance_prot_families_mt)) %>% inner_join (., (final_metadata %>% select (Sample, timepoint))) %>% mutate (timepoint = make.names (timepoint)) %>% pull (timepoint) %>% as.factor()
+
+tumortype_group <- tibble (Sample = colnames (abundance_prot_families_mt)) %>% inner_join (., (final_metadata %>% select (Sample, tumor_type))) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+
+patient_group <- final_metadata$patientId %>% as.factor()
+
+
+
+# Addition of columns for signaling and TM domain prediction for each protein family
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join (., (annotation %>% filter (method == "SignalP/Phobius") %>% select (familyID, feature) %>% rename (denovo_signaling = feature))) %>% left_join (., (annotation %>% filter (method == "TMHMM/Phobius") %>% select (familyID, feature) %>% rename (denovo_transmembrane = feature))) 
+
+#Select only protein families with annotations or with prediction of signaling/TM domain. 
+families_filter <- homology_abun_per_sample3 %>% filter (homology == "SC" | !is.na(denovo_signaling) | !is.na(denovo_transmembrane) ) %>% group_by(homology) %>% pull (familyID)
+
+
+
+#Responder and non Responders samples
+R_samples <- final_metadata %>% filter (Response == "Responder") %>% pull(Sample)
+NR_samples <- final_metadata %>% filter (Response == "Non-responder") %>% pull(Sample)
+
+# Add columns for mean expression in each group. 
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% mutate (mean_abun_responders =  (homology_abun_per_sample3 %>% select (all_of(R_samples)) %>% rowMeans())) %>% mutate ( mean_abun_non_responders = (homology_abun_per_sample3 %>% select (all_of(NR_samples)) %>% rowMeans()))
+
+
+
+
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select (final_metadata$Sample) %>% as.matrix
+
+
+
+
+
+#filter <- filterByExpr(abundance_prot_families_mt, mm, min.count = 3, large.n = 25)
+
+#model matrix
+mm <- model.matrix (~0 + response_group + tumortype_group)
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(response_groupNon.responder - response_groupResponder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+
+
+```
+
+Only protein families that are SC or have a predicted signaling/TM domain are included. 
+From those, only the ones with a mean abundance > 3 in either Responder or non responder are included. 
+
+```{r}
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+            
+
+vp
+```
+
+
+
+
+
+
+
+
+
+
+
+
+### ~ response + tumotype + timepoint + patient
+
+```{r}
+#model matrix
+mm <- model.matrix (~0 + response_group + tumortype_group + timepoint_group + patient_group)
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(response_groupNon.responder - response_groupResponder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+            
+
+vp
+
+```
+
+
+
+
+
+
+### T1 only (~ response + tumor_type)
+
+```{r}
+
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T1")) %>% pull(Sample)) %>% as.matrix()
+
+tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+
+response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+antibiotic_group_T1 <- 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+                
+    
+vp
+
+
+```
+
+
+#####-Heatmap of top results: 
+```{r}
+#Select the top 30 protein families prioritized...
+
+familyID_prior_sup <- top.table %>% as_tibble(rownames = NA) %>% rownames_to_column(var = "familyID") %>% arrange (P.Value) %>% head(n = 30) %>% pull (familyID)
+
+ #Construction of the heatmap df
+heatmap_df <- homology_abun_per_sample3 %>%
+  filter (familyID %in% familyID_prior_sup) %>%
+  pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "cpm") %>%
+  left_join(., (final_metadata %>%
+                  select (Sample, Response, timepoint))) %>%
+  replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>%
+  rename (TM_domain = denovo_transmembrane, Signaling_domain = denovo_signaling) %>%
+  mutate (TM_domain = replace (TM_domain, TM_domain == "Denovo_transmembrane", "Yes"), Signaling_domain = replace (Signaling_domain, Signaling_domain == "Denovo_signaling", "Yes")) 
+
+#Construction of the heatmap (filtering only for T1 samples)
+heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%  filter (timepoint == "T1") %>%
+  mutate (z_score = log2(cpm+0.01)) %>% group_by (Response) %>%
+  heatmap (`Protein family`, Sample, z_score,
+           scale = "row",
+           #show_row_dend = FALSE,
+           show_column_dend = FALSE,
+           show_column_names = FALSE,
+           #palette_grouping = list(c ("black", "grey30")),
+           heatmap_width = unit(10, "npc"),
+           heatmap_height = unit (15, "npc"),
+           row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
+  #annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
+  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response) %>% 
+  as_ComplexHeatmap() %>%
+    ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+
+
+```
+Heatmap of the most significantive protein families in the DA abundance at T1. 
+
+
+
+### T1 only SC proteins (~ response + tumor_type) 
+```{r}
+
+#Generation of the matrix with the protein families (only SC protein families) and the samples filtered. 
+abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter ( homology == "SC") %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T1")) %>% pull(Sample)) %>% as.matrix()
+
+tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+
+response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+#model matrix
+mm <- model.matrix (~0 + response_group_T1 + tumortype_group_T1 )
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(response_group_T1Non.responder - response_group_T1Responder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+
+```
+
+
+
+####Top Go analysis: 
+```{r}
+top_go_terms_df <- annotation %>% filter (familyID %in% (top.table %>% arrange(adj.P.Val) %>% filter (adj.P.Val < 0.05) %>% pull (familyID))) %>% filter (feature == "UniRef90_GO") %>% dplyr::select (familyID, annotation) %>% dplyr::rename (go_terms = annotation)
+
+
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join(., (annotation %>% filter (feature =="UniRef90_GO") %>% dplyr::select (familyID, annotation) %>% dplyr::rename (go_terms = annotation)))
+
+
+
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% select (familyID, homology, go_terms) %>% group_by (homology)
+
+
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% filter (familyID %in% top.table$familyID) %>%  select (familyID, go_terms) %>% mutate (go_terms = str_replace_all(go_terms, ";", ", ")) %>%  write_tsv(., "./R_objects/SC_GO_terms.tsv" )
+
+
+# Read the Go_terms with the appropiate function 
+geneID2GO <- readMappings( file = "./R_objects/SC_GO_terms.tsv")
+
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse (top.table$adj.P.Val < 0.05, 1, 0)
+names(gene_list_go) <- top.table$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+tab %>% View()
+
+
+
+showSigOfNodes(GOdata, score(resultFisher), firstSigNodes = 3, useInfo = "def")
+
+```
+t-test to each go term can be performed to check if it is present more time in the different 
+
+
+Go-enrichment plot
+```{r}
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+  ylab("Biological process") +
+  xlab("Enrichment") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  scale_color_continuous(trans = "log", breaks = c(1,2,4,8,16) ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+```
+Would be better to do a lollipop plot with coloring of the fold enrichment, -log(10, pval) and size as the number of genes. 
+
+
+
+This does not work....
+```{r}
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- top.table$P.Value
+names(gene_list_go) <- top.table$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)x,
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultKS <- runTest(GOdata, algorithm = "weight01", statistic = "ks")
+
+tab <- GenTable(GOdata, raw.p.value = resultKS, topNodes = length(resultKS@score), numChar = 120)
+
+tab %>% View()
+```
+
+
+
+
+
+
+### T2 only (~ response + tumor_type)
+
+```{r}
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T2 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T2")) %>% pull(Sample)) %>% as.matrix()
+
+tumortype_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+
+response_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+#model matrix
+mm <- model.matrix (~0 + response_group_T2 + tumortype_group_T2 )
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T2, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(response_group_T2Non.responder - response_group_T2Responder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
+
+
+###T1 only ( ~ response)
+```{r}
+#model matrix
+mm <- model.matrix (~0 + response_group_T1 )
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(response_group_T1Non.responder - response_group_T1Responder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+## Plot of the pvalue not the adjusted pvalue.  
+```
+
+There are also more protein families overexpresed in the Non-response conditicion compared with the Responders. If the adjusted p-val is ploted (some of the p-values are stratified. ) none of the proteins families reach significance. 
+
+
+
+
+
+
+###Maaslin2 Analysis 
+
+Maaslin2 analysis is performed for the longitudinal analysis. 
+Response and tumor_type are used as fixed effects (important variables that we expect to affect the output)
+Patient is used as a mixed effect. 
+
+
+```{r}
+final_metadata_t <- final_metadata %>% t() %>% as.tibble() %>% add_column( variable = colnames(final_metadata), .before = 1 ) %>% row_to_names((row_number = 1))
+
+
+abundance_prot_families_t <- abundance_prot_families_mt %>% t() %>% as.tibble(rownames = "Sample")
+
+abundance_prot_families_t <- abundance_prot_families_t %>% select (families_filter)
+
+abundance_prot_families_t$Sample <- abundance_prot_families %>% select (contains("DRUP")) %>% colnames()
+abundance_prot_families_t <- abundance_prot_families_t %>% relocate (Sample)
+
+
+saveRDS(abundance_prot_families_t, "./R_objects/abundance_prot_families_t.rds")
+saveRDS(final_metadata, "./R_objects/final_metadata.rds")
+
+final_metadata
+
+'''
+Maaslin2( 
+  input_data = abundance_prot_families_t,
+  input_metadata = final_metadata, 
+  output = "./maaslin2.2",
+  min_prevalence = 0.25 ,
+  normalization = "TSS", 
+  transform = "LOG", 
+  cores = 8, 
+  random_effects = c ("timepoint", "patientId"), 
+  fixed_effects = c ( "Response", "tumor_type"),
+  reference = c ("Response,Responder")
+  )
+'''
+
+```
+Had to interrupt the run when it was generation the boxplots. (not all of them were generated...)
+
+
+```{r}
+maaslin2_results <- read_tsv("./maaslin2.3/all_results.tsv")
+maaslin2_results <- maaslin2_results %>% filter (metadata == "Response")
+
+maaslin2_results$qval<-p.adjust(maaslin2_results$pval, method = 'BH') # FDR correction using 'BH'
+
+## Addition of LogFC column (necessary to add pseudocounts)
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% mutate (logFC = log ((mean_abun_non_responders+0.0001)/(mean_abun_responders+0.0001)))
+
+
+maaslin2_results %>% arrange (pval)
+homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
+This is the volcano plot comming from the TSS normalization and log2 transformation of the data. Doesn't look that bad. 
+
+
+####-Heatmap Maaslin2
+```{r}
+
+####Heatmap top 50 supervised
+
+#Construction of the heatmap df
+heatmap_df <- homology_abun_per_sample3 %>%
+  filter (familyID %in% (maaslin2_results %>% arrange(pval) %>% head(n=50) %>% pull(feature))) %>%
+  pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "cpm") %>%
+  left_join(., (final_metadata %>%
+                  select (Sample, Response, timepoint))) %>%
+  replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>%
+  rename (TM_domain = denovo_transmembrane, Signaling_domain = denovo_signaling) %>%
+  mutate (TM_domain = replace (TM_domain, TM_domain == "Denovo_transmembrane", "Yes"), Signaling_domain = replace (Signaling_domain, Signaling_domain == "Denovo_signaling", "Yes")) 
+
+
+#Construction of the heatmap
+
+heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%
+  mutate (z_score = log2(cpm+0.01)) %>% ### Normalize the abundance
+  group_by (Response) %>% 
+  heatmap (`Protein family`, Sample, z_score,
+           scale = "row",
+           #show_row_dend = FALSE,
+           show_column_dend = FALSE,
+           show_column_names = FALSE,
+           #palette_grouping = list(c ("black", "grey30")),
+           heatmap_width = unit(10, "npc"),
+           heatmap_height = unit (15, "npc"),
+           row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
+  annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
+  annotation_tile (homology) %>% 
+  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response) %>% 
+  as_ComplexHeatmap() %>%
+    ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+
+
+
+
+#Construction of the heatmap (filtering only for T1 samples)
+heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%  filter (timepoint == "T1") %>%
+  mutate (z_score = log2(cpm+0.01)) %>% group_by (Response) %>%
+  heatmap (`Protein family`, Sample, z_score,
+           scale = "row",
+           #show_row_dend = FALSE,
+           show_column_dend = FALSE,
+           show_column_names = FALSE,
+           #palette_grouping = list(c ("black", "grey30")),
+           heatmap_width = unit(10, "npc"),
+           heatmap_height = unit (15, "npc"),
+           row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
+  #annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
+  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response) %>% 
+  as_ComplexHeatmap() %>%
+    ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+?? May want to filter the protein clusters with low levels of abundance. This has to be done in RNA-seq /microarray experiments 
+
+"For good results, the counts matrix should be filtered to remove remove rows with very low counts before running voom(). The filterByExpr function in the edgeR package can be used for that purpose."
+
+
+
+
+
+
+
+
+
+
+
+
+
+Needed graphs: 
+
+- Distribution of length of the protein clusters depending on their homology. 
+- Number of protein clusters per sample. 
+- Why there are more pfam annotations?
+
+
+
+
+
