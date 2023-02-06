@@ -53,7 +53,7 @@ drup_metadata <- read_csv ("/DATA/share/tom_masters/miguel/drup-gut-metadata.csv
 ```{r}
 path_plots <- "/home/m.p.martinez/fun_profiling/plots/metawibele"
 ```
-
+Path to sabe the plots. 
 
 
 ##Exploratory data analysis. 
@@ -90,7 +90,7 @@ annotation_taxonomy %>% filter (feature == "Unclassified") %>% nrow() / n_cluste
 ```
 Most of the predicted proteins are unclassified. (96%)
 
-This constrast with the paper of metawibele which shows that most of the proteins can be taxonomically classified. 
+This contrast with the paper of timetable which shows that most of the proteins can be taxonomically classified. 
 
 ```{r}
 annotation %>% filter (method == "MSPminer") %>% select (annotation) %>% distinct()
