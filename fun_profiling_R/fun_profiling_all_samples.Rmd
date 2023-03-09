@@ -38,6 +38,7 @@ library ("edgeR")
 library ("Maaslin2")
 library ("janitor")
 library ("stringr")
+library("KEGGREST")
 
 
 ```
@@ -57,39 +58,29 @@ annotation_attribute <- annotation_attribute %>% rename (category = anotation)
 abundance_prot_families <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv")
 abundance_prot_families <- abundance_prot_families %>% rename (familyID = ID)
 
-#Remove the samples that should be excluded (MSS, missing response, ...)
-abundance_prot_families <- abundance_prot_families %>% select (-setdiff( (abundance_prot_families %>% select (contains ("DRUP")) %>% colnames()), final_metadata$Sample))
 
 ```
 
-### DRUP metadata
+DRUP metadata
 ```{r}
 drup_metadata <- read_csv ("/DATA/share/tom_masters/miguel/drup-gut-metadata.csv")
 final_metadata <- read_csv ("./filtered-metadata.csv")
 ```
+```{r}
+#Remove the samples that should be excluded (MSS, missing response, ...)
+abundance_prot_families <- abundance_prot_families %>% select (-setdiff( (abundance_prot_families %>% select (contains ("DRUP")) %>% colnames()), final_metadata$Sample))
+```
 
 
-### Path for saving the plots
+Path for saving the plots
 ```{r}
 path_plots <- "/home/m.p.martinez/fun_profiling/plots/metawibele/run2"
 ```
 
 
+Rename oesophagus cancer
 ```{r}
 final_metadata <- final_metadata %>% mutate (tumor_type = replace (tumor_type, tumor_type %in% c ("Oesphagus cancer", "Oesophaghus cancer"), "Oesophagus cancer" ))
-
-```
-
-
-
-
-### Prioritazion outputs
-```{r}
-
-### Prioritize outputs: 
-#prioritize_selected_sup_table <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_supervised_prioritization.rank.selected.table.tsv")
-#prioritize_selected_sup <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_supervised_prioritization.rank.selected.tsv")
-#prioritize_selected_unsup_table <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run1/prioritization2/metawibele_unsupervised_prioritization.rank.selected.table.tsv")
 
 ```
 
@@ -222,16 +213,41 @@ cluster_mean_abun <- homology_abun_per_sample3 %>% select (contains ("DRUP")) %>
 homology_abun_per_sample3 <- homology_abun_per_sample3 %>% mutate (mean_abun = cluster_mean_abun)
 
 ## Distribution of mean abundance of protein families. 
-ggplot (homology_abun_per_sample3, aes (x = log(mean_abun), fill = homology, y = stat(count))) + geom_density (alpha=.3) + theme(text = element_text(size=16))
+ggplot (homology_abun_per_sample3, aes (x = log(mean_abun), fill = homology)) + geom_density (alpha=.3) + theme(text = element_text(size=16)) + theme_classic2()
+
+ggsave ("mean_abundance_homology.png", path = path_plots, height = 4, width = 6 )
 
 
-ggsave ("mean_abundance_homology.png", path = path_plots)
+## Distribution of mean abundance of protein families (boxplots) 
+ggplot (homology_abun_per_sample3, aes (y = log(mean_abun), fill = homology, x = homology)) +
+  geom_boxplot( outlier.alpha = 0.1) +
+  ylab("log (mean abundance)") +
+  theme_bw() + 
+  theme (
+    text = element_text(size = 16), 
+    panel.border = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(color = "black")
+  )
+
+ggsave ("mean_abundance_homology_boxplots.png", path = path_plots)
+
+## Distribution of mean abundance of protein families (boxplots with pvalues)
+my_comparisons = list (c("NH", "SC"), c("NH", "SU"), c("RH", "SC"), c ("RH", "SU"))
+ggplot (homology_abun_per_sample3, aes (y = log(mean_abun), fill = homology, x = homology)) +
+  geom_boxplot( outlier.alpha = 0.1) +
+  stat_compare_means(comparisons = my_comparisons, label = "p.signif" ) +
+  ylab("log (mean abundance)") +
+  theme_bw() + 
+  theme (
+    text = element_text(size = 16), 
+    panel.border = element_blank(), 
+    panel.grid = element_blank(), 
+    axis.line = element_line(color = "black")
+  )
 
 
-
-
-homology_abun_per_sample2 %>% group_by(Sample) %>% summarise (n= sum(abundance))
-
+ggsave ("mean_abundance_homology_boxplots_pval.png", path = path_plots)
 
 ```
 The relative abundance of protein families depending on their homology classification is very similar between samples (there is no distinctiction between responders and non responders)
@@ -242,6 +258,14 @@ The distribution of protein families abundance given their homology classificati
 Drop samples that should not be present in homology_per_sample3 dataframe
 ```{r}
 homology_abun_per_sample3 <- homology_abun_per_sample3 %>% select (-setdiff( (homology_abun_per_sample3 %>% select (contains ("DRUP")) %>% colnames()), final_metadata$Sample))
+
+
+#Add a column of prevalence 
+homology_abun_per_sample3$prevalence <- rowSums (homology_abun_per_sample3 %>% select (contains("DRUP")) >0 ) / dim(final_metadata)[1]
+
+homology_abun_per_sample3 <- homology_abun_per_sample3 %>% filter (prevalence != 0)
+
+
 ```
 
 
@@ -268,7 +292,8 @@ homology_abun_per_sample3 %>% group_by(homology) %>% summarise (per = round (100
 ## Number of proteins forming the cluster depending on the homology...
 cluster_size <- annotation_attribute %>% filter (key == "cluster_size") 
 
-homology_abun_per_sample3["cluster_size"] <- cluster_size %>% mutate(value = as.numeric(value)) %>% pull(value)
+#Add to the data frame
+homology_abun_per_sample3 <- homology_abun_per_sample %>% left_join(.,(cluster_size %>% rename (n_proteins = value) %>% select (familyID, n_proteins) ))
 
 homology_abun_per_sample3 %>% group_by(homology) %>% summarise (mean = mean (cluster_size), max = max(cluster_size))
 
@@ -280,19 +305,58 @@ The mean number of proteins forming the clusters is similar among the different 
 
 *Mean prevalence*
 ```{r}
-# Add prevalence to homology_abun_per_sample3
-homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join(., (annotation %>% filter( feature == "DNA_prevalence") %>% select (familyID, annotation) %>% rename (prevalence = annotation))) 
+# # Add prevalence to homology_abun_per_sample3
+# homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join(., (annotation %>% filter( feature == "DNA_prevalence") %>% select (familyID, annotation) %>% rename (prevalence = annotation))) 
+
+#Add a column of prevalence 
+homology_abun_per_sample3$prevalence <- rowSums (homology_abun_per_sample3 %>% select (contains("DRUP")) >0 ) / dim(final_metadata)[1]
+
 
 #prevalence plot (against abundance...)
-homology_abun_per_sample3 %>% drop_na() %>% ggplot (aes (x = prevalence, y = log(mean_abun))) + geom_jitter(alpha = 0.05) + theme(text = element_text(size=14) , axis.text.x=element_blank())
-ggsave(file = "log_abun~prevalence.png", path = path_plots)
+homology_abun_per_sample3 %>%
+  ggplot (aes (x = as.numeric(prevalence), y = log(mean_abun))) +
+  geom_jitter(alpha = 0.25) +
+  geom_smooth(method = "lm")+ 
+  stat_cor() +
+  geom_density_2d()+
+  theme_bw() + 
+  ylab ("log mean abundance (cpm)") +
+  xlab ("Prevalence") + 
+  theme(
+    text = element_text(size=14), 
+    panel.grid = element_blank(), 
+    panel.border = element_rect (color = "black")
+    )
 
+ggsave(file = "log_abun~prevalence_2.png", path = path_plots)
+
+
+
+homology_abun_per_sample3 %>%
+  ggplot (aes (x = as.numeric(length), y = log(mean_abun))) +
+  geom_jitter(alpha = 0.25) +
+  geom_smooth(method = "lm")+ 
+  stat_cor() +
+  #geom_density_2d()+
+  theme_bw() + 
+  ylab ("log mean abundance (cpm)") +
+  xlab ("Prevalence") + 
+  theme(
+    text = element_text(size=14), 
+    panel.grid = element_blank(), 
+    panel.border = element_rect (color = "black")
+    )
+
+
+## Remake
 homology_abun_per_sample3 %>%  drop_na() %>% mutate (prevalence = jitter (as.double(prevalence), factor = 2)) %>%  ggplot (aes (x = prevalence, y = log(mean_abun)), position = "jitter") + geom_hex(binwidth = c(0.01, 0.16), aes(fill = stat(count))) + facet_grid(rows = vars(homology)) + theme(text = element_text(size=14))
 ggsave(file="log.abun_prevalence_facet.homology.png", path = path_plots, width=6, height=8, dpi=300)
 
 #Density of prevalence
-homology_abun_per_sample3 %>%  drop_na() %>% mutate (prevalence = jitter (as.double(prevalence), factor = 2)) %>% ggplot (aes (x = prevalence, fill = homology,  y = stat(count))) + geom_density (alpha=.3) + theme(text = element_text(size=14))
-ggsave(file="density_prevalence.png", path = path_plots)
+homology_abun_per_sample3 %>% mutate (prevalence = jitter (as.double(prevalence), factor = 1)) %>% ggplot (aes (x = prevalence, fill = homology)) + geom_density (alpha=.3) + theme(text = element_text(size=16)) + theme_classic2()
+
+
+ggsave(file="density_prevalence.png", path = path_plots, height = 4, width = 6)
 
 
 #Make prevalence one depending on responden or non responders....
@@ -352,16 +416,21 @@ homology_abun_per_sample3 <- homology_abun_per_sample3 %>% left_join(cluster_len
 
 homology_abun_per_sample3 %>% ggplot (aes (x = log(length), fill = homology, y = stat(count))) + geom_density(alpha=.3) + 
  theme_bw() + theme (text = element_text(size = 16), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) 
+
+
 ggsave ("protein_lenght_distribution.png", path = path_plots)
 
 
 homology_abun_per_sample3 %>% ggplot (aes (x = homology, y = log(length), fill = homology)) +  geom_boxplot( outlier.alpha = 0.1)   + theme (text = element_text(size = 16)) + 
-  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) )
+  theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16))
+
 ggsave ("protein_lenght_distribution_boxplot.png", path = path_plots)
+
 
 my_comparisons = list (c("NH", "SC"), c("NH", "SU"), c("RH", "SC"), c ("SC", "SU"))
 homology_abun_per_sample3 %>% ggplot (aes (x = homology, y = log(length), fill = homology)) +  geom_boxplot( outlier.alpha = 0.1)   + theme (text = element_text(size = 16)) + stat_compare_means(comparisons = my_comparisons, label = "p.signif" ) + ## Add statistical comparissons with ggpubr package.  
   theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"), text = element_text(size = 16) )
+
 ggsave ("protein_lenght_distribution_boxplot_pval.png", path = path_plots)
 
 
@@ -413,7 +482,7 @@ n_clusters_per_sample_per_homology %>%
   labs (y = "# of protein clusters") + 
   facet_grid (timepoint ~ Response) + 
   theme_bw() * 
-  theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text (size = 14))
+  theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text (size = 16))
 
 ggsave ("numb_clusters_homology_response_time.png", path = path_plots)
 
@@ -593,7 +662,7 @@ homology_abun_per_sample3 <- left_join (homology_abun_per_sample3, (annotation %
   distinct (feature, .keep_all = TRUE) %>% ungroup() %>% select (-c(category,method,AID)) %>% #Delete the repeated empty line.
   pivot_wider (names_from = feature, values_from = annotation)))
 
-# Add protien names to each protein cluster
+# Add protein names to each protein cluster
 homology_abun_per_sample3 <- left_join( homology_abun_per_sample3 , (annotation_attribute %>% filter (category == "UniRef90_homology" & key == "Protein_names") %>% select (familyID, value) %>% rename (protein_name = value)))
 ```
 
@@ -670,18 +739,25 @@ ggsave("correlation_nfamilies_assemblysize.png", path = path_plots)
 
 ```
 
-```{r}
-fastq_stats <- read_delim("~/fun_profiling/quast_assembly/seqkit_stats_fastq.tsv",  )
-
-head (fastq_stats)
-
-```
-
 
 
 
 plot the assembly length agains the total length of the sort read sequences. 
 
+
+Addition of KEGG and GO and PFAM annotation to homology_abundance3 dataframe. 
+
+```{r}
+## add UniRef90 annotation to the df
+homology_abun_per_sample3 <- annotation_uniref %>% filter (feature %in% c("strong_homology", "weak_homology")) %>% select (familyID, annotation) %>% rename(uniref_id = annotation) %>% left_join(homology_abun_per_sample3, .) 
+
+
+homology_abun_per_sample3 <- annotation_uniref %>% filter (category == "UniRef90_characterization") %>% filter (feature == "UniRef90_PfamDomain") %>% select (familyID, annotation) %>% rename (PfamDomain = annotation) %>% left_join(homology_abun_per_sample3, .)
+
+homology_abun_per_sample3 <- annotation_uniref %>% filter (category == "UniRef90_characterization") %>% filter (feature == "UniRef90_eggNOG") %>% select (familyID, annotation) %>% rename (eggNOG = annotation) %>% left_join(homology_abun_per_sample3, .)
+
+homology_abun_per_sample3 <-annotation_uniref %>% filter (category == "UniRef90_characterization") %>% filter (feature == "UniRef90_KEGG-KOs") %>% select (familyID, annotation) %>% rename (KEGG_KOs = annotation) %>% left_join(homology_abun_per_sample3, .)
+```
 
 
 ##Comparisson with Humman3: 
@@ -692,6 +768,8 @@ Loading of the Humman3 data
 humman_uniref <- read_tsv("/DATA/share/tom_masters/miguel/stratification/gene_families_unstratified.txt")
 
 metawibele_samples <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv",n_max = 2)
+
+## All the samples analyzed by metawibele (including the samples that were dropped later) 
 metawibele_samples <- metawibele_samples %>% select (contains("DRUP")) %>% colnames()
 
 
@@ -699,22 +777,25 @@ metawibele_samples <- metawibele_samples %>% select (contains("DRUP")) %>% colna
 humman_uniref <- humman_uniref %>% rename_with(.cols = contains ("DRUP"), .fn = function(x){str_replace(x, pattern = "_Abundance-RPKs", replacement = "")})
 humman_uniref <- humman_uniref %>% select (`# Gene Family`, metawibele_samples)
 
+humman_uniref$mean_abundance <- humman_uniref %>% select (contains ("DRUP")) %>% rowMeans()
+humman_uniref <- humman_uniref %>% filter (mean_abundance > 0) ## remove also the proteins ID that were only present on the removed samples
 
 ##Comparisson of the differences number of uniref annotations: 
 
 uniref_metawibele <- annotation_uniref %>% filter (feature %in% c("strong_homology", "weak_homology") ) %>% pull(annotation)
 uniref_humman <- humman_uniref[-1,] %>% pull (`# Gene Family`)
 
+
 # library
 library(VennDiagram)
  
-#Make the plot
+#Make the venndiagram
 venn.diagram(
   x = list(
     uniref_metawibele,
     uniref_humman
     ),
-  category.names = c("Metawibele", "Humman3"),
+  category.names = c("MetaWIBELE", "HUMAnN3"),
   filename = "VennDiagram.png", 
           lwd = 1,
           col=c("#440154ff", '#21908dff'),
@@ -732,23 +813,44 @@ venn.diagram(
   
 )
 
+#Make the venndiagram using only the annotations of strong homology in metawibele
+uniref_metawibele_sh <- annotation_uniref %>% filter (feature == "strong_homology" ) %>% pull(annotation)
+
+venn.diagram(
+  x = list(
+    uniref_metawibele_sh,
+    uniref_humman
+    ),
+  category.names = c("MetaWIBELE", "HUMAnN3"),
+  filename = "VennDiagram_sh.png", 
+          lwd = 1,
+          col=c("#440154ff", '#21908dff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3)),
+          cex = 1.3,
+          fontfamily = "sans",
+          print.mode=c("raw","percent"),
+          cat.cex = 1.5,
+          cat.default.pos = "outer",
+          cat.pos = c(360, 360),
+          cat.dist = c(0.055, 0.055),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff'),
+          #rotation = 1
+  
+)
 
 
 ### Make linear regression of the proteins that they have in common: 
 
-
 uniref_common <- intersect (uniref_humman, uniref_metawibele)
-uniref_common %>% length()
-
-humman_uniref$mean_abundance <- humman_uniref %>% select (contains ("DRUP")) %>% rowMeans()
-
-homology_abun_per_sample3 %>% select (-contains("DRUP")) %>% colnames()
 
 
 
-homology_abun_per_sample3 <- annotation_uniref %>% filter (feature %in% c("strong_homology", "weak_homology")) %>% select (familyID, annotation) %>% rename(uniref_id)
 
-## Make the metawibele dataframe with all the samples analyzed in metawibele + the unireff annotation to the correspondent samples)
+## add annotaiton of the uniref_id t
+homology_abun_per_sample3 <- annotation_uniref %>% filter (feature %in% c("strong_homology", "weak_homology")) %>% select (familyID, annotation) %>% rename(uniref_id = annotation) %>% left_join(homology_abun_per_sample3, .) 
+
+## Make the metawibele dataframe with all the samples analyzed in metawibele + the unireff annotation to the correspondent samples
 metawibele_uniref <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv")
 metawibele_uniref$mean_abun <- metawibele_uniref %>% select (contains ("DRUP")) %>% rowMeans() 
 
@@ -765,19 +867,19 @@ metawibele_uniref <- metawibele_uniref %>%
                  rename (uniref_id = annotation)
              )
   )
-
-
 humman_uniref <- humman_uniref %>% rename(uniref_id = `# Gene Family`) %>% select (uniref_id, mean_abundance) %>% .[-1,]
-
+#Filter the 0s (Samples that have been removed). 
+humman_uniref <- humman_uniref %>% filter (mean_abundance > 0) 
 
 
 humman_uniref %>% filter (uniref_id %in% uniref_common) %>% rename (mean_abundance_humman = mean_abundance ) %>% left_join(., metawibele_uniref) %>% 
   filter (mean_abundance_humman > 0) %>% 
   ggplot (aes(x = log10(mean_abundance_humman), y = log10(mean_abun))) + 
-  geom_point(size = 0.2) + 
+  geom_jitter(alpha = 0.2) +
+  #geom_point(size = 0.2) + 
   geom_smooth(method = "lm") + 
-  xlab ("log10 Humann3 mean abundance") + 
-  ylab ("log10 Metawibele mean abundance") +
+  xlab ("log10 HUMAnN 3 mean abundance") + 
+  ylab ("log10 METAWIBELE mean abundance") +
   stat_cor() +
   theme_bw() + 
   theme(
@@ -789,7 +891,139 @@ humman_uniref %>% filter (uniref_id %in% uniref_common) %>% rename (mean_abundan
 
 ggsave("coor_abundance_humman_metawibele.png", path = path_plots)
 
+
+## Same linear regression between common proteins but only the proteins with SH in uniref (not including the ones with remote homology 
+# that have low confidence)
+
+metawibele_uniref <- read_tsv ("/home/m.p.martinez/fun_profiling/metawibele/output/run2/characterization/finalized/metawibele_proteinfamilies_nrm.tsv")
+metawibele_uniref$mean_abun <- metawibele_uniref %>% select (contains ("DRUP")) %>% rowMeans() 
+metawibele_uniref_sh <- metawibele_uniref %>% 
+  rename (familyID = ID) %>% 
+  select (familyID, mean_abun) %>%
+  left_join(.,
+            (annotation_uniref %>%
+                 filter (
+                   feature == "strong_homology") %>% 
+                 select(familyID, annotation) %>% 
+                 rename (uniref_id = annotation)
+             )
+  )
+uniref_common <- intersect (uniref_humman, uniref_metawibele_sh)
+
+humman_uniref %>% filter (uniref_id %in% uniref_common) %>% rename (mean_abundance_humman = mean_abundance ) %>% left_join(., metawibele_uniref_sh) %>% 
+  filter (mean_abundance_humman > 0) %>% 
+  ggplot (aes(x = log10(mean_abundance_humman), y = log10(mean_abun))) + 
+  geom_jitter(alpha = 0.2) +
+  #geom_point(size = 0.2) + 
+  geom_smooth(method = "lm") + 
+  xlab ("log10 HUMAnN 3 mean abundance") + 
+  ylab ("log10 METAWIBELE mean abundance") +
+  stat_cor() +
+  theme_bw() + 
+  theme(
+    panel.border = element_rect (color = "black"), 
+    panel.grid.minor = element_blank(), 
+    panel.grid.major = element_blank(),
+    text = element_text (size = 16)
+  )
+
+ggsave("coor_abundance_humman_metawibele_sh.png", path = path_plots)
+
+
+# Comparisson of abundance between the uniref protein families that were only detected by metawibele or the ones that were detected by unireff and humman
+metawibele_uniref_sh %>% mutate ("common" = ifelse(uniref_id %in% uniref_common, "Shared with HUMAnN 3", "Unique")) %>% 
+  ggplot(aes(y = log(mean_abun), x = common)) + 
+  geom_violin(color = "#440154ff", fill = adjustcolor( "#440154ff", alpha.f = 0.3)) +
+  geom_boxplot(width = 0.3, color = "#440154ff", fill = adjustcolor( "#440154ff", alpha.f = 0.3)) + 
+  stat_compare_means(comparisons = list (c("Unique", "Shared with HUMAnN 3")), label = "p.signif")+
+  xlab("UniRef90 proteins detected")+
+  ylab("log mean abundance (cpm)") +
+  ggtitle ("MetaWIBELE") + 
+  theme_bw() + 
+  theme (
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(colour = "black"), 
+    text = element_text(size = 16), 
+    plot.title = element_text(hjust = 0.5)
+  ) 
+  #stat_compare_means( comparisons = list (c("Common", "Unique")))
+
+ggsave("abundance_comparisson_common_uniref_metawibele.png", path = path_plots)
+
+
+# Comparisson of abundance between the uniref protein families that were only detected by metawibele or the ones that were detected by unireff and humman
+humman_uniref %>% mutate ("common" = ifelse(uniref_id %in% uniref_common, "Shared with MetaWIBELE", "Unique")) %>% 
+  ggplot(aes(y = log(mean_abundance), x = common)) + 
+  geom_violin(color = "#21908dff", fill = adjustcolor( "#21908dff", alpha.f = 0.3)) +
+  geom_boxplot(width = 0.3, color = "#21908dff", fill = adjustcolor( "#21908dff", alpha.f = 0.3)) + 
+  stat_compare_means(comparisons = list (c("Unique", "Shared with MetaWIBELE")), label = "p.signif")+
+  ggtitle ("HUMAnN3") +
+  xlab("UniRef90 proteins detected")+
+  ylab("log mean abundance (RPKM)") +
+  theme_bw() + 
+  theme (
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(colour = "black"), 
+    text = element_text(size = 16), 
+    plot.title = element_text(hjust = 0.5)
+  ) 
+  #stat_compare_means (comparisos = list (c("Common", "Unique")))
+  
+ggsave("abundance_comparisson_common_uniref_humann.png", path = path_plots)
+
+
+
+
 ```
+
+
+
+Check if there are differences in the annotations of the proteins that are only detected by metawibele compared with the ones of humman.  
+```{r}
+
+
+uniref_common <- intersect (uniref_humman, uniref_metawibele_sh)
+
+
+uniref_unique_metawibele <- setdiff(uniref_metawibele_sh, uniref_common)
+
+
+length (uniref_common)
+length (uniref_unique_metawibele)
+length (uniref_metawibele_sh)
+n_distinct(uniref_metawibele_sh)
+
+
+#comparison between the unique proteis of unireff and the ones shared with humman
+
+unique_percent <- homology_abun_per_sample3 %>% filter (uniref_id %in% uniref_unique_metawibele) %>% filter (homology %in% c ("SC", "SU")) %>% group_by (homology) %>% summarise (n = n()/dim(.)[1]) %>% mutate (proteins = c("Unique MetaWIBELE", "Unique MetaWIBELE"))
+
+
+shared_percent <- homology_abun_per_sample3 %>% filter (uniref_id %in% uniref_common) %>% filter (homology %in% c ("SC", "SU")) %>% group_by (homology) %>% summarise (n = n()/dim(.)[1]) %>% mutate (proteins = c("Shared with HUMAnN", "Shared with HUMAnN"))
+
+
+homology_abun_per_sample3 %>% filter (uniref_id %in% uniref_unique_metawibele) %>% filter (homology %in% c ("SC", "SU")) %>% select (KEGG_KOs) %>% n_distinct()
+
+homology_abun_per_sample3 %>% filter (uniref_id %in% uniref_common) %>% filter (homology %in% c ("SC", "SU")) %>% select (KEGG_KOs) %>% n_distinct()
+
+
+bind_rows(unique_percent, shared_percent) %>%
+  ggplot (aes (x = proteins, y = n, fill = homology)) +
+  geom_col() +
+  xlab("") + 
+  ylab("Percentage (%)")+
+  theme_bw(base_size = 16)
+
+
+
+
+
+```
+
+The proteins that are annotated are the ones that are shared with humman3. In the ones that are uniquely detected by metawibele there are almost no SC proteins....
+
 
 
 
@@ -933,21 +1167,240 @@ rarecurve_plot
 
 First applying directly the Bray curtis dissimilarity and plottiing the first two PCoA. 
 ```{r}
-
 bray_distance <- vegdist (t(abundance_prot_families_mt))
 pcoa <- pcoa(bray_distance)
-
-pcoa_plot <- pcoa$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId")))) %>% 
-  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
-  xlab (paste0("PCo1 (",round(pcoa$values[1,1], 2),"%)"))+
-  ylab (paste0("PCo2 (",round(pcoa$values[2,1], 2),"%)")) +
-  ggtitle ("PCoA protein clusters abundance")
-pcoa_plot
 ```
 
 
 
+```{r}
+
+pcoa_plot <- pcoa$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), color = "blue") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), color = "red") +
+  xlab (paste0("PCo1 (",round(pcoa$values[1,1], 2),"%)"))+
+  ylab (paste0("PCo2 (",round(pcoa$values[2,1], 2),"%)")) +
+  ggtitle ("PCoA protein clusters abundance")
+pcoa_plot
+
+
+##PCoA of BrayCurtis dissimilarity of T1 and T2
+bray_distance_T1 <- vegdist (t(abundance_prot_families %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% filter (timepoint == "T1") %>% pull (Sample)) %>% as.matrix() ))
+pcoa_T1 <- pcoa(bray_distance_T1)
+
+bray_distance_T2 <- vegdist (t(abundance_prot_families %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% filter (timepoint == "T2") %>% pull (Sample)) %>% as.matrix() ))
+pcoa_T2 <- pcoa(bray_distance_T2)
+
+
+
+pcoa_plot_T1 <- pcoa_T1$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_T1$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PCo1 (",round(pcoa$values[1,3] * 100, 2),"%)"))+
+  ylab (paste0("PCo2 (",round(pcoa$values[2,3] * 100, 2),"%)")) +
+  ggtitle ("T1") +
+  annotate("text", label = "test") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+pcoa_plot_T2 <- pcoa_T2$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_T2$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PCo1 (",round(pcoa_T2$values[1,3]*100, 2),"%)"))+
+  ylab (paste0("PCo2 (",round(pcoa_T2$values[2,3]*100, 2),"%)")) +
+  ggtitle ("T2") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+
+## Adonis test to compare the significance of the clusters differences.
+adonis2(bray_distance_T1 ~ Response, data = (final_metadata %>% filter (timepoint == "T1")))
+adonis2(bray_distance_T2 ~ Response, data = (final_metadata %>% filter (timepoint == "T2")))
+
+
+
+ggarrange(pcoa_plot_T1, pcoa_plot_T2, common.legend = TRUE, legend = "bottom")
+
+ggsave("pcoa_T1_T2.png", path = path_plots, height = 4, width = 8)
+
+
+pcoa_plot_T1
+pcoa_plot_T2
+
+```
+
+PCoA using the CLR normalization of the data (aitchison dissimilarity)
+```{r}
+##PCoA of aitchison dissimilarity of T1 and T2
+ait_distance_T1_clr <- vegdist (clr(t(abundance_prot_families %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% filter (timepoint == "T1") %>% pull (Sample)) %>% as.matrix() )), method = "euclidean")
+pcoa_T1_clr <- pcoa(ait_distance_T1_clr)
+
+ait_distance_T2_clr <- vegdist (clr(t(abundance_prot_families %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% filter (timepoint == "T2") %>% pull (Sample)) %>% as.matrix() )), method = "euclidean")
+pcoa_T2_clr <- pcoa(ait_distance_T2_clr)
+
+
+pcoa_plot_T1 <- pcoa_T1_clr$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_T1_clr$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PC1 (",round(pcoa_T1_clr$values[1,3] * 100, 2),"%)"))+
+  ylab (paste0("PC2 (",round(pcoa_T1_clr$values[2,3] * 100, 2),"%)")) +
+  ggtitle ("T1") +
+  annotate("text", label = "test") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+pcoa_plot_T2 <- pcoa_T2_clr$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_T2_clr$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PC1 (",round(pcoa_T2_clr$values[1,3]*100, 2),"%)"))+
+  ylab (paste0("PC2 (",round(pcoa_T2_clr$values[2,3]*100, 2),"%)")) +
+  ggtitle ("T2") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+
+## Adonis test to compare the significance of the clusters differences.
+adonis2(bray_distance_T1_clr ~ Response, data = (final_metadata %>% filter (timepoint == "T1")))
+adonis2(bray_distance_T2_clr ~ Response, data = (final_metadata %>% filter (timepoint == "T2")))
+
+
+
+ggarrange(pcoa_plot_T1, pcoa_plot_T2, common.legend = TRUE, legend = "bottom")
+
+ggsave("pca_aitchison_T1_T2.png", path = path_plots, height = 4, width = 8)
+
+pcoa_plot_T1
+pcoa_plot_T2
+
+
+
+```
+
+#### PCA aitchison distance all samples (feature selection by prevalence)
+
+```{r}
+
+##PCoA of aitchison dissimilarity of T1 and T2
+ait_distance_clr <- vegdist (clr(t(abundance_prot_families %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% pull (Sample)) %>% as.matrix() )), method = "euclidean")
+pcoa_clr <- pcoa(ait_distance_clr)
+
+##PCoA of aitchison dissimilarity low prevalence proteins
+ait_distance_lp_clr <- vegdist (clr(t(abundance_prot_families %>% filter (familyID %in% (homology_abun_per_sample3 %>% slice_min(prevalence, prop = 0.2) %>% select (familyID, prevalence) %>% pull(familyID))) %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% pull (Sample)) %>% as.matrix() )), method = "euclidean")
+pcoa_lp_clr <- pcoa(ait_distance_lp_clr)
+
+##PCoA of aitchison dissimilarity high prevalence proteins
+ait_distance_hp_clr <- vegdist (clr(t(abundance_prot_families %>% filter (familyID %in% (homology_abun_per_sample3 %>% slice_max(prevalence, prop = 0.2) %>% select (familyID, prevalence) %>% pull(familyID))) %>% column_to_rownames(var = "familyID") %>%  select (final_metadata %>% pull (Sample)) %>% as.matrix() )), method = "euclidean")
+pcoa_hp_clr <- pcoa(ait_distance_hp_clr)
+
+
+```
+
+```{r}
+
+
+
+
+pcoa_plot_T1 <- pcoa_clr$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_clr$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PC1 (",round(pcoa_T1_clr$values[1,3] * 100, 2),"%)"))+
+  ylab (paste0("PC2 (",round(pcoa_T1_clr$values[2,3] * 100, 2),"%)")) +
+  ggtitle ("T1") +
+  annotate("text", label = "test") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+
+
+pcoa_plot_T2 <- pcoa_lp_clr$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_lp_clr$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PC1 (",round(pcoa_T2_clr$values[1,3]*100, 2),"%)"))+
+  ylab (paste0("PC2 (",round(pcoa_T2_clr$values[2,3]*100, 2),"%)")) +
+  ggtitle ("T2") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+
+
+pcoa_plot_T3 <- pcoa_hp_clr$vectors %>% as_tibble() %>% add_column(Sample = rownames(pcoa_hp_clr$vectors), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "ATB_use")))) %>% 
+  ggplot(aes ( x = Axis.1, y = Axis.2)) + geom_point (aes (color = Response)) + 
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment (data = (. %>% filter (Response == "Responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  geom_segment (data = (. %>% filter (Response == "Non-responder")), aes (x = mean (Axis.1), y = mean (Axis.2), xend = Axis.1, yend = Axis.2, color  = Response), alpha = 0.8) +
+  xlab (paste0("PC1 (",round(pcoa_T2_clr$values[1,3]*100, 2),"%)"))+
+  ylab (paste0("PC2 (",round(pcoa_T2_clr$values[2,3]*100, 2),"%)")) +
+  ggtitle ("T2") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(), 
+    text = element_text (size = 16)
+  )
+
+
+pcoa_plot_T1
+pcoa_plot_T2
+pcoa_plot_T3
+
+
+
+## Adonis test to compare the significance of the clusters differences.
+adonis2(bray_distance_T1_clr ~ Response, data = (final_metadata %>% filter (timepoint == "T1")))
+adonis2(bray_distance_T2_clr ~ Response, data = (final_metadata %>% filter (timepoint == "T2")))
+
+
+
+ggarrange(pcoa_plot_T1, pcoa_plot_T2, common.legend = TRUE, legend = "bottom")
+
+#ggsave("pca_aitchison_T1_T2.png", path = path_plots, height = 4, width = 8)
+
+
+```
+
+
+
+
 Applying Log Centered Ration normalization to the data. 
+
+Make PCA of LCR transformation (similar to aitchisono distance)
 ```{r}
 abundance_prot_families_mt_clr <- clr (t(abundance_prot_families_mt))
 #euclidean <- vegdist (t(abundance_prot_families_mt_clr))
@@ -959,7 +1412,7 @@ pca_abundance <- prcomp (abundance_prot_families_mt_clr)
 
 
 
-PCs_abundance <- pca_abundance$x %>% as_tibble() %>%  add_column(Sample = rownames(pca_abundance$x), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use"))))  %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+PCs_abundance <- pca_abundance$x %>% as_tibble() %>%  add_column(Sample = rownames(pca_abundance$x), .before = 1) %>% left_join (., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use", "tumor_group"))))  %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
 
 PCs_12_mean_sample <- PCs_abundance %>% group_by(patientId) %>% summarise (x = mean(PC1), y = mean (PC2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
 PCs_abundance <- PCs_abundance %>% left_join (., PCs_12_mean_sample)
@@ -986,8 +1439,8 @@ pca_plot3 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes
   #ggtitle ("PCA protein clusters abundance")+
   theme(text = element_text(size=12))
 
-#Tumor_type
-pca_plot4 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = tumor_type)) +
+#Tumor_groups
+pca_plot4 <- PCs_abundance %>% ggplot (aes (x = PC1, y = PC2)) + geom_point( aes (color = tumortype_group)) +
   xlab (paste0("PC1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
   ylab (paste0("PC2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
   theme(text = element_text(size=12))
@@ -1034,6 +1487,137 @@ ggsave("pca_abundance_cb.png", path = path_plots, height = 4, width = 6)
 ```
 
 
+###Distance comparisson: 
+
+
+bray curtis dissimilarity
+```{r}
+#Make the bray curtis dissimilarity a matrix
+bray_distance_mt <- as.matrix (bray_distance)
+
+
+#Data frame with the bray dissimilarity matrices...
+bray_distance_df <- bray_distance_mt %>% as_tibble () %>% mutate (Sample = colnames(.), .before = 1) 
+
+
+#Boxplot for the Bray Curtis distance between responders and non responders
+bray_distance_df %>% pivot_longer(cols = contains("DRUP"), names_to = "Sample2", values_to = "BC_dissimilarity") %>% left_join(., (final_metadata %>% select (Sample, patientId, Response, timepoint, ATB_use))) %>%
+  left_join(., (final_metadata %>% select (Sample, patientId) %>% rename (patientId2 = patientId)), by = c("Sample2" = "Sample")) %>%
+  filter (patientId == patientId2) %>% filter (Sample != Sample2) %>% filter (timepoint== "T1") %>% 
+  ggplot (aes (x = Response, y = BC_dissimilarity)) + 
+  geom_boxplot(aes (fill = Response), show.legend = FALSE) + 
+  #geom_jitter(aes(color = ATB_use)) + 
+  ylab ("Bray Curtis Dissimilarity T1-T2")+
+  stat_compare_means(comparisons = list (c("Responder", "Non-responder")),label = "p.signif" )+
+  theme_classic(base_size = 16)
+
+ggsave("BrayCurtis_Responders_Nonresponders.png", path = path_plots, height = 4, width = 4)
+
+  
+
+#Check if there is more difference if we remove the samples that only detect very few protein clusters. 
+bray_distance_df %>% pivot_longer(cols = contains("DRUP"), names_to = "Sample2", values_to = "BC_dissimilarity") %>%
+  left_join(., (final_metadata %>% select (Sample, patientId, Response, timepoint, ATB_use))) %>%
+  left_join(., (final_metadata %>% select (Sample, patientId) %>%
+                  rename (patientId2 = patientId)), by = c("Sample2" = "Sample")) %>%
+  filter (patientId == patientId2) %>%
+  left_join(., (quast_report %>%
+                  rename (Sample = sampleId) %>%
+                  select (Sample, n_clusters))) %>%
+    left_join(., (quast_report %>%
+                  rename (Sample2 = sampleId, n_clusters2 = n_clusters) %>%
+                  select (Sample2, n_clusters2))) %>%
+  filter (n_clusters > 75000 & n_clusters2 > 75000) %>%
+  filter (Sample != Sample2) %>%
+  filter (timepoint== "T1") %>% 
+  ggplot (aes (x = Response, y = BC_dissimilarity)) + 
+  geom_boxplot() + 
+  geom_jitter(aes(color = ATB_use)) + 
+  geom_text_repel(aes (label = Sample)) 
+
+
+
+#Boxplot 
+bray_distance_df %>% pivot_longer(cols = contains("DRUP"), names_to = "Sample2", values_to = "BC_dissimilarity") %>% left_join(., (final_metadata %>% select (Sample, patientId, Response, timepoint, ATB_use))) %>%
+  left_join(., (final_metadata %>% select (Sample, patientId) %>% rename (patientId2 = patientId)), by = c("Sample2" = "Sample")) %>%
+  mutate (same_patient = ifelse (patientId == patientId2, "Same patient", "Random")) %>% filter (Sample != Sample2) %>% filter (timepoint== "T1") %>% 
+  ggplot (aes (x = same_patient, y = BC_dissimilarity)) + 
+    #geom_jitter(aes(color = ATB_use)) + 
+  ylab ("Bray Curtis Dissimilarity T1-T2")+
+  stat_compare_means(comparisons = list(c("Random", "Same patient")),label = "p.signif", size = 5  )+
+  theme_classic(base_size = 16) + 
+  xlab("")+
+  geom_boxplot(aes (fill = same_patient), show.legend = FALSE)
+  
+ggsave("BrayCurtis_random_paired.png", path = path_plots, height = 4.1, width = 4)
+
+```
+
+
+Aitchison dissimilarity
+```{r}
+#Make the aitchison dissimilarity  matrix
+aitchison_mt <- as.matrix ( vegdist (t(abundance_prot_families_mt), method = "aitchison", pseudocount = 1))
+
+
+#Data frame with the bray dissimilarity matrices...
+aitchison_df <- aitchison_mt %>% as_tibble () %>% mutate (Sample = colnames(.), .before = 1) 
+
+
+#Boxplot for the Bray Curtis distance between responders and non responders
+aitchison_df %>% pivot_longer(cols = contains("DRUP"), names_to = "Sample2", values_to = "Aitchison_distance") %>% left_join(., (final_metadata %>% select (Sample, patientId, Response, timepoint, ATB_use))) %>%
+left_join(., (final_metadata %>% select (Sample, patientId) %>% rename (patientId2 = patientId)), by = c("Sample2" = "Sample")) %>%
+filter (patientId == patientId2) %>% filter (Sample != Sample2) %>% filter (timepoint== "T1") %>% 
+ggplot (aes (x = Response, y = Aitchison_distance)) + 
+geom_boxplot(aes (fill = Response), show.legend = FALSE) + 
+#geom_jitter(aes(color = ATB_use)) + 
+ylab ("Aitchison distance T1-T2")+
+stat_compare_means(comparisons = list (c("Responder", "Non-responder")), label = "p.signif" )+
+theme_classic(base_size = 16)
+
+ggsave("Aitchison_Responders_Nonresponders.png", path = path_plots, height = 4, width = 4)
+
+
+
+#Check if there is more difference if we remove the samples that only detect very few protein clusters. 
+# aitchison_df %>% pivot_longer(cols = contains("DRUP"), names_to = "Sample2", values_to = "Aitchison_distance") %>%
+#   left_join(., (final_metadata %>% select (Sample, patientId, Response, timepoint, ATB_use))) %>%
+#   left_join(., (final_metadata %>% select (Sample, patientId) %>%
+#                   rename (patientId2 = patientId)), by = c("Sample2" = "Sample")) %>%
+#   filter (patientId == patientId2) %>%
+#   left_join(., (quast_report %>%
+#                   rename (Sample = sampleId) %>%
+#                   select (Sample, n_clusters))) %>%
+#     left_join(., (quast_report %>%
+#                   rename (Sample2 = sampleId, n_clusters2 = n_clusters) %>%
+#                   select (Sample2, n_clusters2))) %>%
+#   filter (n_clusters > 75000 & n_clusters2 > 75000) %>%
+#   filter (Sample != Sample2) %>%
+#   filter (timepoint== "T1") %>% 
+#   ggplot (aes (x = Response, y = Aitchison_distance)) + 
+#   geom_boxplot() + 
+#   geom_jitter(aes(color = ATB_use)) + 
+#   geom_text_repel(aes (label = Sample)) 
+
+
+#Boxplot 
+aitchison_df %>% pivot_longer(cols = contains("DRUP"), names_to = "Sample2", values_to = "Aitchison_distance") %>% left_join(., (final_metadata %>% select (Sample, patientId, Response, timepoint, ATB_use))) %>%
+left_join(., (final_metadata %>% select (Sample, patientId) %>% rename (patientId2 = patientId)), by = c("Sample2" = "Sample")) %>%
+mutate (same_patient = ifelse (patientId == patientId2, "Same patient", "Random")) %>% filter (Sample != Sample2) %>% filter (timepoint== "T1") %>% 
+ggplot (aes (x = same_patient, y = Aitchison_distance)) + 
+  #geom_jitter(aes(color = ATB_use)) + 
+ylab ("Aitchison distance T1-T2")+
+stat_compare_means(comparisons = list(c("Random", "Same patient")),label = "p.signif", size = 5  )+
+theme_classic(base_size = 16) + 
+xlab("")+
+geom_boxplot(aes (fill = same_patient), show.legend = FALSE)
+
+ggsave("Aitchison_random_paired.png", path = path_plots, height = 4.1, width = 4)
+
+```
+
+
+
 ###UMAPS
 ```{r}
 
@@ -1041,7 +1625,7 @@ ggsave("pca_abundance_cb.png", path = path_plots, height = 4, width = 6)
 umap_abundance <- umap (as.matrix(abundance_prot_families_mt_clr))
 
 #Generate table with UMAP1 and 2 with other variables for plotting. 
-umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename(UMAP1="V1",UMAP2="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% left_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) %>% mutate (, Id_num = as.numeric(factor(.$patientId)))
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename(UMAP1="V1",UMAP2="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% left_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use", "tumor_groups") ))) %>% mutate (, Id_num = as.numeric(factor(.$patientId)))
 
 
 umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
@@ -1065,8 +1649,10 @@ umap_plot2 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes 
 umap_plot3 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Batch)) +
   theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
 
-#Tumor_type
-umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = tumor_type)) +
+#Tumor_group
+umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( aes (color = tumor_groups)) +
+  labs (color = "Tumor groups")+
   theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
 
 
@@ -1074,6 +1660,7 @@ umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes 
 umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
   geom_point(aes (color = patientId), show.legend = FALSE) +
   geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  labs (color = "Patient id")+
   #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
   geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) +
   theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
@@ -1082,6 +1669,7 @@ umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) +
 
 #Antibiotics use
 umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+    labs (color = "ATB use") + 
   theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
 
 #Clinical Benefit
@@ -1117,16 +1705,43 @@ ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample 
 
 ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
 
-#Patient ID
+#antibiotic use ID
 umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
-  geom_point( show.legend = FALSE) +
+  geom_point(  show.legend = TRUE, aes (shape = timepoint, color = ATB_use)) +
+  labs (color = "ATB use")+
   #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
   #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
   geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16)) +
+  scale_color_manual(values=c("black", "purple"))  #theme(text = element_text(size=12))
+
+ggsave("umap_abundance_atb_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+
+#Response line
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(  show.legend = TRUE, aes (shape = timepoint, color = Response)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), alpha = 0.8) +
   theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
   #theme(text = element_text(size=12))
 
-ggsave("umap_abundance_atb_lines.png", path = path_umaps_plots, height = 4, width = 6)
+ggsave("umap_abundance_response_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+#Bor line
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(  show.legend = TRUE, aes (shape = timepoint, color = BOR)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = BOR), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+ggsave("umap_abundance_BOR_lines.png", path = path_umaps_plots, height = 4, width = 6)
 
 
 
@@ -1311,9 +1926,9 @@ umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) +
 
 ```{r}
 #Filter for high prevalence
-abundance_prot_homology_filtered <- homology_abun_per_sample3  %>% mutate (prevalence = as.double(prevalence)) %>% filter (prevalence >= 0.25) %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
+abundance_prot_homology_filtered <- homology_abun_per_sample3  %>% mutate (prevalence = as.double(prevalence)) %>% filter (prevalence >= 0.5) %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
 
-umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered), preserve.seed = TRUE)
 
 umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
 
@@ -1375,6 +1990,32 @@ umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) +
 ggsave("HPrevalence-umap_abundance_response_lines.png", path = path_umaps_plots, height = 4, width = 6)
 
 
+
+#Groups with elipses
+umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( aes(color = Response, shape = timepoint)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+ggsave("HPrevalence-umap_abundance_response_lines_elipses.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+
+
+
+
+
+
+
+
+
+
+
 ```
 
 
@@ -1387,7 +2028,7 @@ ggsave("HPrevalence-umap_abundance_response_lines.png", path = path_umaps_plots,
 #Filter for high prevalence
 abundance_prot_homology_filtered <- homology_abun_per_sample3  %>% mutate (prevalence = as.double(prevalence)) %>% filter (prevalence <= 0.15) %>% column_to_rownames("familyID") %>% select (contains("DRUP0")) %>% as.matrix() %>% t() %>% clr()
 
-umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered))
+umap_abundance <- umap (as.matrix(abundance_prot_homology_filtered), preserve.seed = TRUE)
 
 umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
 
@@ -1448,6 +2089,21 @@ umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) +
 
 
 ggsave("LPrevalence-umap_abundance_response_lines.png", path = path_umaps_plots, height = 4, width = 6)
+
+
+# Cluster groups with elipses
+umap_df %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( aes(color = Response, shape = timepoint)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  stat_ellipse(data = (. %>% filter (Response == "Responder")), aes( color = Response), linetype = "dashed") +
+  stat_ellipse(data = (. %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+path_umaps_plots <- "/home/m.p.martinez/fun_profiling/plots/metawibele/run2/umaps"
+ggsave("LPrevalence-umap_abundance_response_lines_elipses.png", path = path_umaps_plots, height = 4, width = 6)
 
 ```
 
@@ -1632,6 +2288,7 @@ homology_abun_per_sample4 <- left_join( homology_abun_per_sample4, (t(abundance_
 
 homology_abun_per_sample4 <- left_join (homology_abun_per_sample4, (annotation %>% filter (feature == "MSPminer_MSP") %>% select (c ("familyID", "annotation")) %>% rename (pangenome = annotation) ))
 
+saveRDS(homology_abun_per_sample3, "./R_objects/homology_abun_per_sample3.rds")
 
 ```
 
@@ -1897,22 +2554,24 @@ vp
 
 
 
-### T1 only (~ response + tumor_type)
+### T1 only (~ response + tumor_type + ATB_use)
 
 ```{r}
 
 #Generation of the matrix with the protein families and the samples filtered. 
 abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T1")) %>% pull(Sample)) %>% as.matrix()
 
-tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# 
+# response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
 
-response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
-
-antibiotic_group_T1 <- 
+#antibiotic_group_T1 <- 
 
 
 #model matrix
 mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+# mm <- model.matrix (~0 + Response + tumor_groups + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_groups = make.names(tumor_groups))))
 
 #Voom modeling of the data
 y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
@@ -1938,16 +2597,33 @@ top.table
 vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
   ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
     geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
     theme_bw() +
-  geom_hline (yintercept = -log(0.05,10)) +
-  geom_hline (yintercept = -log(0.1, 10)) + 
-  geom_hline (yintercept = -log( 0.25, 10))
-                
-    
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Responders vs Non-responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
 vp
+
+ggsave("T1_limma_response_tumortype_atb_use.png", path = path_plots, height = 4, width = 6)
 
 
 ```
+No significant associations if the tumor_groups variables is used instead of tumor_type
+
+
+
+
+
+
+
 
 
 #####-Heatmap of top results: 
@@ -1979,9 +2655,10 @@ heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane =
            heatmap_height = unit (15, "npc"),
            row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
   #annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
-  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
-  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
-  annotation_tile (Response) %>% 
+  annotation_tile (Signaling_domain, palette = c("lightblue", "blueviolet")) %>%
+  annotation_tile(TM_domain, palette = c("lightblue", "blueviolet"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response, palette = c("brown4", "olivedrab")) %>% 
+   annotation_tile (homology) %>%
   as_ComplexHeatmap() %>%
     ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
 
@@ -1991,18 +2668,28 @@ Heatmap of the most significantive protein families in the DA abundance at T1.
 
 
 
-### T1 only SC proteins (~ response + tumor_type) 
+
+
+
+
+#### T1 only SC proteins (~ response + tumor_type + ATB_use)
+
+Only the SC proteins have GO annotations
+
 ```{r}
 
 #Generation of the matrix with the protein families (only SC protein families) and the samples filtered. 
 abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter ( homology == "SC") %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T1")) %>% pull(Sample)) %>% as.matrix()
 
-tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
-
-response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+# tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# 
+# response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+# 
+# #model matrix
+# mm <- model.matrix (~0 + response_group_T1 + tumortype_group_T1 )
 
 #model matrix
-mm <- model.matrix (~0 + response_group_T1 + tumortype_group_T1 )
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
 
 #Voom modeling of the data
 y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
@@ -2012,7 +2699,7 @@ fit <- lmFit(y, mm)
 
 head (coef(fit))
 
-contr <- makeContrasts(response_group_T1Non.responder - response_group_T1Responder, levels = colnames(coef(fit)))
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
 #contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
 
 #fitting of the contrast
@@ -2021,7 +2708,7 @@ tmp <- contrasts.fit (fit , contr)
 #Empirical Bayes smoothing of standard errors 
 tmp <- eBayes (tmp)
 
-top.table <- topTable (tmp, sort.by = "P", n = Inf)
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
 
 top.table
 top.table <- top.table %>% rownames_to_column(var = "familyID")
@@ -2034,11 +2721,33 @@ vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID,
 vp
 
 
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Responders vs Non-responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("T1_limma_SCprots_response_tumortype_atb_use.png", path = path_plots, height = 4, width = 6)
+
+
+
 ```
 
 
 
-####Top Go analysis: 
+######Top Go analysis: 
 ```{r}
 top_go_terms_df <- annotation %>% filter (familyID %in% (top.table %>% arrange(adj.P.Val) %>% filter (adj.P.Val < 0.05) %>% pull (familyID))) %>% filter (feature == "UniRef90_GO") %>% dplyr::select (familyID, annotation) %>% dplyr::rename (go_terms = annotation)
 
@@ -2151,19 +2860,199 @@ tab %>% View()
 
 
 
-
-### T2 only (~ response + tumor_type)
+#### T1 only KEGG proteins (~ response + tumor_type + ATB_use)
 
 ```{r}
-#Generation of the matrix with the protein families and the samples filtered. 
-abundance_prot_families_mt_filter_T2 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T2")) %>% pull(Sample)) %>% as.matrix()
+#Generation of the matrix with the protein families (only SC protein families) and the samples filtered. 
+abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>%
+  column_to_rownames(var = "familyID") %>%
+  filter (KEGG_KOs != NaN) %>%
+  select (final_metadata %>%
+             filter (timepoint == "T1") %>% pull(Sample))  %>%
+  mutate(mean = rowMeans(.)) %>%
+  filter (mean > 3) %>%
+  select (-mean) %>% 
+  as.matrix()
 
-tumortype_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
 
-response_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
 
 #model matrix
-mm <- model.matrix (~0 + response_group_T2 + tumortype_group_T2 )
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+
+
+
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
+
+
+
+### New prevalence filter 
+
+
+#### T1 only (new filter by prevalence)
+
+Selecting all the proteins (SC, SU and the ones with TM and SD annotations) 
+(~ response + tumor_type + ATB_use)
+```{r}
+
+
+#Add a column of prevalence 
+homology_abun_per_sample3$prevalence_T1 <- rowSums (homology_abun_per_sample3 %>% select (contains("DRUP") & contains("T1")) > 0 ) / dim(final_metadata %>% filter (timepoint == "T1"))[1]
+
+homology_abun_per_sample3$mean_T1 <- rowMeans (homology_abun_per_sample3 %>% select (contains("DRUP") & contains("T1")) ) 
+
+
+#Select only protein families with annotations or with prediction of signaling/TM domain. 
+families_filter <- homology_abun_per_sample3 %>% filter (homology %in% c("SC", "SU") | !is.na(denovo_signaling) | !is.na(denovo_transmembrane) ) %>% pull (familyID)
+
+
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>% filter (prevalence_T1 > 0.30 & mean_T1 > 0.40 ) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T1")) %>% pull(Sample)) %>% as.matrix()
+
+
+# tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# 
+# response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+#antibiotic_group_T1 <- 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+# mm <- model.matrix (~0 + Response + tumor_groups + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_groups = make.names(tumor_groups))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 15), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+path_DA = "/home/m.p.martinez/fun_profiling/plots/metawibele/run2/DA_new_filter"
+
+ggsave("T1_limma_response_tumortype_atb_use.png", path = path_DA, height = 4, width = 6)
+
+
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+```
+
+
+
+
+
+#### T2 only (new filter by prevalence)
+
+(~ response + tumor_type + ATB_use)
+```{r}
+
+
+#Add a column of prevalence 
+homology_abun_per_sample3$prevalence_T2 <- rowSums (homology_abun_per_sample3 %>% select (contains("DRUP") & contains("T2")) > 0 ) / dim(final_metadata %>% filter (timepoint == "T2"))[1]
+
+homology_abun_per_sample3$mean_T2 <- rowMeans (homology_abun_per_sample3 %>% select (contains("DRUP") & contains("T2")) ) 
+
+
+#Select only protein families with annotations or with prediction of signaling/TM domain. 
+families_filter <- homology_abun_per_sample3 %>% filter (homology %in% c("SC", "SU") | !is.na(denovo_signaling) | !is.na(denovo_transmembrane) ) %>% pull (familyID)
+
+
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T2 <- homology_abun_per_sample3 %>% filter (prevalence_T2 > 0.30 & mean_T2 > 0.40 ) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T2")) %>% pull(Sample)) %>% as.matrix()
+
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T2") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+# mm <- model.matrix (~0 + Response + tumor_groups + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_groups = make.names(tumor_groups))))
 
 #Voom modeling of the data
 y <- voom (abundance_prot_families_mt_filter_T2, mm, plot = T )
@@ -2173,7 +3062,570 @@ fit <- lmFit(y, mm)
 
 head (coef(fit))
 
-contr <- makeContrasts(response_group_T2Non.responder - response_group_T2Responder, levels = colnames(coef(fit)))
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T2)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("T2_limma_response_tumortype_atb_use.png", path = path_DA, height = 4, width = 6)
+
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T2)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+```
+
+Fraction of proteins differentially abundant that have transmembrane and signaling domain.
+```{r}
+top.table <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, denovo_signaling, denovo_transmembrane, homology))
+
+top.table
+
+#Non-responders
+top.table %>% filter (adj.P.Val < 0.05 & logFC > 1) %>% group_by (denovo_transmembrane) %>% summarise (n = n(), per = n/dim(top.table %>% filter (adj.P.Val < 0.05 & logFC > 1))[1])
+
+top.table %>% filter ((adj.P.Val < 0.05 & logFC > 1))  %>% group_by (denovo_signaling) %>% summarise (n = n(),per = n/dim(top.table %>% filter (adj.P.Val < 0.05 & logFC > 1))[1])
+
+#Responders
+top.table %>% filter (adj.P.Val < 0.05 & logFC < 1) %>% group_by (denovo_transmembrane) %>% summarise (n = n(), per = n/dim(top.table %>% filter (adj.P.Val < 0.05 & logFC < 1))[1])
+
+top.table %>% filter ((adj.P.Val < 0.05 & logFC < 1))  %>% group_by (denovo_signaling) %>% summarise (n = n(), per = n/dim(top.table %>% filter (adj.P.Val < 0.05 & logFC < 1))[1])
+
+#All protein clusters analyzed
+top.table  %>% group_by (denovo_transmembrane) %>% summarise (n = n(), per = n/dim(top.table)[1])
+top.table  %>% group_by (denovo_signaling) %>% summarise (n = n(), per = n/dim(top.table)[1])
+
+
+```
+
+
+
+
+
+
+
+
+
+
+#### T1 only only SC
+```{r}
+
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T1 <- homology_abun_per_sample3 %>% filter (prevalence_T1 > 0.30 & mean_T1 > 0.40 ) %>% filter (homology == "SC") %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T1")) %>% pull(Sample)) %>% as.matrix()
+
+
+# tumortype_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# 
+# response_group_T1 <- final_metadata %>% filter (timepoint == "T1") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+#antibiotic_group_T1 <- 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+# mm <- model.matrix (~0 + Response + tumor_groups + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_groups = make.names(tumor_groups))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T1, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table_t1 <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table_t1
+
+vp <- top.table_t1 %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("T1_SC_limma_response_tumortype_atb_use.png", path = path_DA, height = 4, width = 5)
+
+
+vp <- top.table_t1 %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+  #geom_text_repel(data = . %>% filter (-log(P.Value,10) > 5), aes (x = logFC, y = -log(P.Value,10), label = protein_name)) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Responders vs Non-responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+```
+
+```{r}
+
+top.table_t1 %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, go_terms)) %>% View() 
+
+```
+
+top.table_t1 %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) 
+
+
+######Top Go analysis: 
+
+Enriched in non-responders
+```{r}
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% filter (familyID %in% top.table_t1$familyID) %>%  select (familyID, go_terms) %>% mutate (go_terms = str_replace_all(go_terms, ";", ", ")) %>%  write_tsv(., "./R_objects/SC_GO_terms.tsv" )
+
+
+# Read the Go_terms with the appropiate function 
+geneID2GO <- readMappings( file = "./R_objects/SC_GO_terms.tsv")
+
+
+top.table_t1 <- top.table_t1 %>% rownames_to_column(var = "familyID")
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse ((top.table_t1$adj.P.Val < 0.05 & top.table_t1$logFC > 0), 1, 0)
+names(gene_list_go) <- top.table_t1$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+```
+t-test to each go term can be performed to check if it is present more time in the different 
+
+Go-enrichment plot
+```{r}
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+  ylab("Biological process") +
+  xlab("Enrichment") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+
+
+tab %>% filter (Significant > 2) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  scale_color_continuous(trans = "log", breaks = c(1,2,4,8,16) ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+```
+Enriched in responders
+```{r}
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+
+#top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse ((top.table_t1$adj.P.Val < 0.05 & top.table_t1$logFC < 0), 1, 0)
+names(gene_list_go) <- top.table_t1$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+```
+t-test to each go term can be performed to check if it is present more time in the different 
+
+Go-enrichment plot
+```{r}
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+  ylab("Biological process") +
+  xlab("Enrichment") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+
+
+tab %>% filter (Significant > 2) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  #scale_color_continuous(trans = "log", breaks = c(1,2,4,8,16) ) +
+  #scale_color_continuous()+
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+```
+
+
+####T2 only SC
+```{r}
+
+
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T2 <- homology_abun_per_sample3 %>% filter (prevalence_T2 > 0.30 & mean_T2 > 0.40 ) %>% filter (homology == "SC") %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T2")) %>% pull(Sample)) %>% as.matrix()
+
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T2") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+# mm <- model.matrix (~0 + Response + tumor_groups + ATB_use,  data = (final_metadata %>% filter (timepoint == "T1") %>% mutate (Response = make.names(Response), tumor_groups = make.names(tumor_groups))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T2, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("T2_SC_limma_response_tumortype_atb_use.png", path = path_DA, height = 4, width = 5)
+
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+
+top.table_t2 <- top.table %>% rownames_to_column(var = "familyID")
+```
+
+######Top Go analysis: 
+Enriched in non-responders
+```{r}
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% filter (familyID %in% top.table_t2$familyID) %>%  select (familyID, go_terms) %>% mutate (go_terms = str_replace_all(go_terms, ";", ", ")) %>%  write_tsv(., "./R_objects/SC_GO_terms.tsv" )
+
+
+# Read the Go_terms with the appropiate function 
+geneID2GO <- readMappings( file = "./R_objects/SC_GO_terms.tsv")
+
+
+#top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse ((top.table_t2$adj.P.Val < 0.05 & top.table_t2$logFC > 0), 1, 0)
+names(gene_list_go) <- top.table_t2$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+```
+t-test to each go term can be performed to check if it is present more time in the different 
+
+Go-enrichment plot
+```{r}
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+  ylab("Biological process") +
+  xlab("Enrichment") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+
+
+tab %>% filter (Significant > 2) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  scale_color_continuous(trans = "log", breaks = c(1,2,4,8,16) ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+```
+
+
+Enriched in responders
+```{r}
+
+
+#top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse ((top.table_t2$adj.P.Val < 0.05 & top.table_t2$logFC < 0), 1, 0)
+names(gene_list_go) <- top.table_t2$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+```
+t-test to each go term can be performed to check if it is present more time in the different 
+
+Go-enrichment plot
+```{r}
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+  ylab("Biological process") +
+  xlab("Enrichment") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+
+
+tab %>% filter (Significant > 2) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  #scale_color_continuous(trans = "log", breaks = c(0.5,1.2,2,3,4,8,16) ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+```
+
+
+
+
+
+
+### T2 only (~ response + tumor_type + ATB_use)
+
+```{r}
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter_T2 <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T2")) %>% pull(Sample)) %>% as.matrix()
+# 
+# tumortype_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# 
+# response_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T2") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter_T2, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
 #contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
 
 #fitting of the contrast
@@ -2186,13 +3638,383 @@ top.table <- topTable (tmp, sort.by = "P", n = Inf)
 
 top.table
 
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
 vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
   ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
     geom_point(size = 2/5) +
     theme_bw()
     
 vp
+
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Responders vs Non-responders at T2)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("T2_limma_response_tumortype_atb_use.png", path = path_plots, height = 4, width = 6)
 ```
+
+
+#####-Heatmap of top results: 
+```{r}
+#Select the top 30 protein families prioritized...
+
+familyID_prior_sup <- top.table %>% as_tibble(rownames = NA) %>% rownames_to_column(var = "familyID") %>% arrange (P.Value) %>% head(n = 30) %>% pull (familyID)
+
+ #Construction of the heatmap df
+heatmap_df <- homology_abun_per_sample3 %>%
+  filter (familyID %in% familyID_prior_sup) %>%
+  pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "cpm") %>%
+  left_join(., (final_metadata %>%
+                  select (Sample, Response, timepoint))) %>%
+  replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>%
+  rename (TM_domain = denovo_transmembrane, Signaling_domain = denovo_signaling) %>%
+  mutate (TM_domain = replace (TM_domain, TM_domain == "Denovo_transmembrane", "Yes"), Signaling_domain = replace (Signaling_domain, Signaling_domain == "Denovo_signaling", "Yes")) 
+
+#Construction of the heatmap (filtering only for T1 samples)
+heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%  filter (timepoint == "T1") %>%
+  mutate (z_score = log2(cpm+0.01)) %>% group_by (Response) %>%
+  heatmap (`Protein family`, Sample, z_score,
+           scale = "row",
+           #show_row_dend = FALSE,
+           show_column_dend = FALSE,
+           show_column_names = FALSE,
+           #palette_grouping = list(c ("black", "grey30")),
+           heatmap_width = unit(10, "npc"),
+           heatmap_height = unit (15, "npc"),
+           row_names_max_width = unit(10, "cm"),
+           row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
+  #annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+  annotation_tile (Signaling_domain, palette = c("lightblue", "blueviolet")) %>%
+  annotation_tile(TM_domain, palette = c("lightblue", "blueviolet"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response, palette = c("brown4", "olivedrab")) %>% 
+   annotation_tile (homology) %>%
+  as_ComplexHeatmap() %>%
+    ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+
+
+```
+
+####T2 only SC proteins 
+```{r}
+#Generation of the matrix with the protein families (only SC protein families) and the samples filtered. 
+abundance_prot_families_mt_filter <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter ( homology == "SC") %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (timepoint == "T2")) %>% pull(Sample)) %>% as.matrix()
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T2") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Responders vs Non-responders at T2)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("T2_limma_SCprots_response_tumortype_atb_use.png", path = path_plots, height = 4, width = 6)
+
+
+```
+
+
+
+####Top Go analysis: 
+
+#####NR increased GO pathways T2. 
+```{r}
+
+#Only the ones enriched in non responders
+top_go_terms_df <- annotation %>% filter (familyID %in% (top.table %>% arrange(adj.P.Val) %>% filter (adj.P.Val < 0.05 & logFC > 0) %>% pull (familyID))) %>% filter (feature == "UniRef90_GO") %>% dplyr::select (familyID, annotation) %>% dplyr::rename (go_terms = annotation)
+
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% filter (familyID %in% top.table$familyID) %>%  select (familyID, go_terms) %>% mutate (go_terms = str_replace_all(go_terms, ";", ", ")) %>%  write_tsv(., "./R_objects/SC_GO_terms.tsv" )
+
+
+# Read the Go_terms with the appropiate function 
+geneID2GO <- readMappings( file = "./R_objects/SC_GO_terms.tsv")
+
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse (top.table$adj.P.Val < 0.05 & top.table$logFC > 0, 1, 0)
+names(gene_list_go) <- top.table$familyID
+
+#Creation of teh GO data object
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+#Geneartion of test comparing the probability of being in the eriched side of the non responders
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+# tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+#   ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+#   geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+#   ylab("Biological process") +
+#   xlab("Enrichment") +
+#   theme_bw() +
+#   theme(
+#     panel.grid.major = element_blank(), 
+#     panel.grid.minor = element_blank(), 
+#     text = element_text(size = 16)
+#   )
+
+
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected ))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  scale_color_continuous(trans = "log" , breaks = c(2,4,8,16), labels = c(2,4,8,16), lim = c(1,18) )+
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    text = element_text(size = 16)
+  )
+
+
+```
+
+
+
+
+#####R increased GO pathways T2. 
+```{r}
+
+#Only the ones enriched in non responders
+top_go_terms_df <- annotation %>% filter (familyID %in% (top.table %>% arrange(adj.P.Val) %>% filter (adj.P.Val < 0.05 & logFC < 0) %>% pull (familyID))) %>% filter (feature == "UniRef90_GO") %>% dplyr::select (familyID, annotation) %>% dplyr::rename (go_terms = annotation)
+
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% filter (familyID %in% top.table$familyID) %>%  select (familyID, go_terms) %>% mutate (go_terms = str_replace_all(go_terms, ";", ", ")) %>%  write_tsv(., "./R_objects/SC_GO_terms.tsv" )
+
+
+# Read the Go_terms with the appropiate function 
+geneID2GO <- readMappings( file = "./R_objects/SC_GO_terms.tsv")
+
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse (top.table$adj.P.Val < 0.05 & top.table$logFC < 0, 1, 0)
+names(gene_list_go) <- top.table$familyID
+
+#Creation of teh GO data object
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+#Geneartion of test comparing the probability of being in the eriched side of the non responders
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+# tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+#   ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+#   geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+#   ylab("Biological process") +
+#   xlab("Enrichment") +
+#   theme_bw() +
+#   theme(
+#     panel.grid.major = element_blank(), 
+#     panel.grid.minor = element_blank(), 
+#     text = element_text(size = 16)
+#   )
+
+
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected ))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  scale_color_continuous(trans = "log" , breaks = c(2,4,8,16), labels = c(2,4,8,16), lim = c(1,18) )+
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    text = element_text(size = 16)
+  )
+```
+
+
+
+
+####T2 only KEGG proteins (~ Response + tumor_type + ATB_use)
+```{r}
+#Generation of the matrix with the protein families (only SC protein families) and the samples filtered. 
+abundance_prot_families_mt_filter <- homology_abun_per_sample3 %>%
+  column_to_rownames(var = "familyID") %>%
+  filter (KEGG_KOs != NaN) %>%
+  select (final_metadata %>%
+             filter (timepoint == "T2") %>% pull(Sample))  %>%
+  mutate(mean = rowMeans(.)) %>%
+  filter (mean > 3) %>%
+  select (-mean) %>% 
+  as.matrix()
+
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use,  data = (final_metadata %>% filter (timepoint == "T2") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+
+
+
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+top.table <- top.table %>% rownames_to_column(var = "familyID")
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+vp <- top.table %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (adj.P.Val < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Responders vs Non-responders at T2)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+
+
+
+```
+
+```{r}
+homology_abun_per_sample3 %>% filter (familyID %in% (top.table %>% filter (P.Value < 0.05 & logFC < 0) %>% pull (familyID))) %>% select (familyID, KEGG_KOs) %>% write_tsv("KeGG_anotations.tsv", col_names = FALSE) 
+
+listDatabases()
+
+keggGet(c("K12112", "K14762", "K09901"))
+```
+
 
 
 ###T1 only ( ~ response)
@@ -2229,10 +4051,114 @@ vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homolo
 vp
 ## Plot of the pvalue not the adjusted pvalue.  
 ```
-
 There are also more protein families overexpresed in the Non-response conditicion compared with the Responders. If the adjusted p-val is ploted (some of the p-values are stratified. ) none of the proteins families reach significance. 
 
 
+
+### Non-Responders (~ response + tumor_type + ATB_use)
+
+```{r}
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (Response == "Non-responder")) %>% pull(Sample)) %>% as.matrix()
+# 
+# tumortype_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, tumor_type) %>% mutate (tumor_type = make.names(tumor_type)) %>%  pull (tumor_type) %>% as.factor()
+# 
+# response_group_T2 <- final_metadata %>% filter (timepoint == "T2") %>%  select (Sample, Response) %>% mutate (Response = make.names(Response)) %>%  pull (Response) %>% as.factor()
+
+
+
+#model matrix
+mm <- model.matrix (~0 + timepoint + tumor_type + ATB_use,  data = (final_metadata %>% filter (Response == "Non-responder") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(timepointT1 - timepointT2, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
+No significative differences between the non responders in both times. 
+
+
+
+Non-Responders KEGG
+```{r}
+
+```
+
+
+### Responders only: 
+
+```{r}
+#Generation of the matrix with the protein families and the samples filtered. 
+abundance_prot_families_mt_filter <- homology_abun_per_sample3 %>% filter (mean_abun_responders > 3 | mean_abun_non_responders > 3) %>% filter (familyID %in% families_filter) %>% column_to_rownames(var = "familyID") %>% select ((final_metadata %>% filter (Response == "Responder")) %>% pull(Sample)) %>% as.matrix()
+
+
+#model matrix
+mm <- model.matrix (~0 + timepoint + tumor_type + ATB_use,  data = (final_metadata %>% filter (Response == "Responder") %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+#Voom modeling of the data
+y <- voom (abundance_prot_families_mt_filter, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(timepointT1 - timepointT2, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
 
 
 
@@ -2290,8 +4216,8 @@ maaslin2_results$qval<-p.adjust(maaslin2_results$pval, method = 'BH') # FDR corr
 homology_abun_per_sample3 <- homology_abun_per_sample3 %>% mutate (logFC = log ((mean_abun_non_responders+0.0001)/(mean_abun_responders+0.0001)))
 
 
-maaslin2_results %>% arrange (pval)
-homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
+# maaslin2_results %>% arrange (pval)
+# homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
 
 vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
   ggplot (aes (x = logFC, y = -log(qval,10))) +
@@ -2299,8 +4225,122 @@ vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_
     theme_bw()
     
 vp
+
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10)))  +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (qval < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (qval < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+ggsave("Maaslin2_response_tumortype_atb_use.png", path = path_plots, height = 4, width = 6)
+
+maaslin2_results <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC))
+
 ```
 This is the volcano plot comming from the TSS normalization and log2 transformation of the data. Doesn't look that bad. 
+
+Look into the proteins differentially expressed to see if there are any with kegg KO annotations
+```{r}
+maaslin2_results %>% filter (qval <= 0.1)
+homology_abun_per_sample3 %>% filter (familyID %in% (maaslin2_results %>% filter (qval <= 0.1) %>% pull(feature))) %>% filter (KEGG_KOs != NaN) %>% select (familyID, KEGG_KOs)
+```
+0 proteins with KEGG annotation are differentially expressed.. 
+
+
+
+#####Top Go analysis: 
+
+Enriched in non-responders
+```{r}
+
+
+
+
+# Save the GO_terms from the protein families used for the limma-voom analysis. 
+homology_abun_per_sample3 %>% filter (go_terms != NaN) %>% filter (familyID %in% maaslin2_results$familyID) %>%  select (familyID, go_terms) %>% mutate (go_terms = str_replace_all(go_terms, ";", ", ")) %>%  write_tsv(., "./R_objects/SC_GO_terms.tsv" )
+
+
+# Read the Go_terms with the appropiate function 
+geneID2GO <- readMappings( file = "./R_objects/SC_GO_terms.tsv")
+
+
+
+
+## Creation of the gene list with 1 if adjusted pval < 0.05 and 0 otherwise. 
+gene_list_go <- ifelse ((maaslin2_results$qval < 0.05), 1, 0)
+names(gene_list_go) <- maaslin2_results$familyID
+
+
+GOdata <- new("topGOdata",
+        ontology = "BP", # MF, BP or CC
+        allGenes = gene_list_go,
+        geneSelectionFun = function(x)(x == 1),
+        annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+
+resultFisher <- runTest(GOdata, algorithm = "elim", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher, topNodes = length(resultFisher@score),
+                numChar = 120)
+
+
+```
+t-test to each go term can be performed to check if it is present more time in the different 
+
+Go-enrichment plot
+```{r}
+
+## Make go enrichment plot: 
+tab <- tab %>% mutate (raw.p.value = as.numeric(raw.p.value), term2 = paste(Term, GO.ID, sep = "/")) %>% as_tibble
+
+tab %>% filter (Annotated > 4) %>% head(n = 20) %>%
+  ggplot( aes(x=-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_col(aes(fill = "Red"), show.legend = FALSE) + 
+  ylab("Biological process") +
+  xlab("Enrichment") +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+
+
+tab %>% filter (Significant > 2 & raw.p.value < 0.1) %>% head(n = 20) %>%
+  ggplot(aes(x =-log10(raw.p.value), y=fct_reorder(Term, raw.p.value, .desc = TRUE))) +
+  geom_segment(aes(x = 0, xend = -log10(raw.p.value), y = fct_reorder(Term, raw.p.value, .desc = TRUE), yend = fct_reorder(Term, raw.p.value, .desc = TRUE), color = Significant/Expected), show.legend = FALSE) +
+  geom_point (aes(size = Significant * 1.5, color = Significant/Expected))+
+  ylab("Biological process") +
+  xlab(expression("-log"[10]*"Pval")) +
+  labs(color = "Enrichment", size = "Number proteins") +
+  #scale_color_continuous(trans = "log", breaks = c(1,2,4,8,16) ) +
+  theme_bw() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    text = element_text(size = 16)
+  )
+
+```
+
+
+
+
 
 
 ####-Heatmap Maaslin2
@@ -2310,7 +4350,7 @@ This is the volcano plot comming from the TSS normalization and log2 transformat
 
 #Construction of the heatmap df
 heatmap_df <- homology_abun_per_sample3 %>%
-  filter (familyID %in% (maaslin2_results %>% arrange(pval) %>% head(n=50) %>% pull(feature))) %>%
+  filter (familyID %in% (maaslin2_results %>% arrange(pval) %>% head(n=40) %>% pull(feature))) %>%
   pivot_longer(cols = contains("DRUP0"), names_to = "Sample", values_to = "cpm") %>%
   left_join(., (final_metadata %>%
                   select (Sample, Response, timepoint))) %>%
@@ -2319,33 +4359,34 @@ heatmap_df <- homology_abun_per_sample3 %>%
   mutate (TM_domain = replace (TM_domain, TM_domain == "Denovo_transmembrane", "Yes"), Signaling_domain = replace (Signaling_domain, Signaling_domain == "Denovo_signaling", "Yes")) 
 
 
-#Construction of the heatmap
+# #Construction of the heatmap
+# 
+# heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%
+#   mutate (z_score = log2(cpm+0.01)) %>% ### Normalize the abundance
+#   group_by (Response) %>% 
+#   heatmap (`Protein family`, Sample, z_score,
+#            scale = "row",
+#            #show_row_dend = FALSE,
+#            show_column_dend = FALSE,
+#            show_column_names = FALSE,
+#            #palette_grouping = list(c ("black", "grey30")),
+#            heatmap_width = unit(10, "npc"),
+#            heatmap_height = unit (15, "npc"),
+#            row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
+#   annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+#   annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
+#   annotation_tile (homology) %>% 
+#   annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+#   annotation_tile (Response) %>% 
+#   as_ComplexHeatmap() %>%
+#     ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
 
-heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%
-  mutate (z_score = log2(cpm+0.01)) %>% ### Normalize the abundance
-  group_by (Response) %>% 
-  heatmap (`Protein family`, Sample, z_score,
-           scale = "row",
-           #show_row_dend = FALSE,
-           show_column_dend = FALSE,
-           show_column_names = FALSE,
-           #palette_grouping = list(c ("black", "grey30")),
-           heatmap_width = unit(10, "npc"),
-           heatmap_height = unit (15, "npc"),
-           row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
-  annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
-  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
-  annotation_tile (homology) %>% 
-  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
-  annotation_tile (Response) %>% 
-  as_ComplexHeatmap() %>%
-    ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
 
 
 
 
 #Construction of the heatmap (filtering only for T1 samples)
-heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>%  filter (timepoint == "T1") %>%
+heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane = "No")) %>% rename ("Protein family" = "familyID") %>% 
   mutate (z_score = log2(cpm+0.01)) %>% group_by (Response) %>%
   heatmap (`Protein family`, Sample, z_score,
            scale = "row",
@@ -2356,13 +4397,1327 @@ heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane =
            heatmap_width = unit(10, "npc"),
            heatmap_height = unit (15, "npc"),
            row_labels = (heatmap_df %>% group_by (familyID) %>% summarise (pro_name = unique (protein_name)) %>% pull (pro_name))) %>%
-  #annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
-  annotation_tile (Signaling_domain, palette = c("Yellowgreen", "Gray")) %>%
-  annotation_tile(TM_domain, palette = c("Gray", "Yellowgreen"), annotation_name_gp = gpar (fontface = "bold"))  %>%
-  annotation_tile (Response) %>% 
+  annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+  annotation_tile (Signaling_domain, palette = c("blueviolet", "lightblue")) %>%
+  annotation_tile(TM_domain, palette = c("lightblue", "blueviolet"), annotation_name_gp = gpar (fontface = "bold"))  %>%
+  annotation_tile (Response, palette = c("brown4", "olivedrab")) %>% 
+   annotation_tile (homology) %>%
   as_ComplexHeatmap() %>%
     ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
 
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+###Maaslin2 Analysis CLR
+```{r}
+maaslin2_results <- read_tsv("./maaslin2.4_clr/all_results.tsv")
+maaslin2_results <- maaslin2_results %>% filter (metadata == "Response")
+
+maaslin2_results$qval<-p.adjust(maaslin2_results$pval, method = 'BH') # FDR correction using 'BH'
+
+
+
+maaslin2_results %>% arrange (pval)
+homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
+
+
+### Maaslin2 only SC clusters
+
+SC clusters are the only ones that have GO annotation. 
+TSS and log transformation
+```{r}
+abundance_prot_families_t <- abundance_prot_families_mt %>% t() %>% as.tibble(rownames = "Sample")
+
+##Filter the samples with GO annotation only
+abundance_prot_families_t <- abundance_prot_families_t %>%
+  select (homology_abun_per_sample3 %>%
+            filter(homology == "SC") %>% pull(familyID) )
+
+abundance_prot_families_t$Sample <- abundance_prot_families %>% select (contains("DRUP")) %>% colnames()
+abundance_prot_families_t <- abundance_prot_families_t %>% relocate (Sample)
+
+abundance_prot_families_t %>% saveRDS("./R_objects/abundance_SCprot_families_t.rds")
+
+```
+
+
+
+
+```{r}
+maaslin2_results <- read_tsv("./maaslin2.6_GO/all_results.tsv")
+maaslin2_results <- maaslin2_results %>% filter (metadata == "Response")
+
+maaslin2_results$qval<-p.adjust(maaslin2_results$pval, method = 'BH') # FDR correction using 'BH'
+
+
+
+maaslin2_results %>% arrange (pval)
+homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(pval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+```
+
+
+
+
+
+### Maaslin2 only KEGG
+
+```{r}
+
+abundance_prot_families_t <- abundance_prot_families_mt %>% t() %>% as.tibble(rownames = "Sample")
+
+##Filter the samples with KEGG annotation only
+abundance_prot_families_t <- abundance_prot_families_t %>%
+  select (homology_abun_per_sample3 %>%
+            filter(KEGG_KOs != NaN) %>% pull(familyID) )
+
+abundance_prot_families_t$Sample <- abundance_prot_families %>% select (contains("DRUP")) %>% colnames()
+abundance_prot_families_t <- abundance_prot_families_t %>% relocate (Sample)
+
+
+# Maaslin2( 
+#   input_data = abundance_prot_families_t,
+#   input_metadata = final_metadata, 
+#   output = "./maaslin2.5_KEGG",
+#   min_prevalence = 0.3 ,
+#   normalization = "TSS", 
+#   transform = "LOG", 
+#   cores = 8, 
+#   random_effects = c ("timepoint", "patientId"), 
+#   fixed_effects = c ( "Response", "tumor_type", "ATB_use"),
+#   reference = c ("Response,Responder")
+#   )
+
+
+```
+
+
+```{r}
+maaslin2_results <- read_tsv("./maaslin2.5_KEGG/all_results.tsv")
+maaslin2_results <- maaslin2_results %>% filter (metadata == "Response")
+
+maaslin2_results$qval<-p.adjust(maaslin2_results$pval, method = 'BH') # FDR correction using 'BH'
+
+
+
+maaslin2_results %>% arrange (pval)
+homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+vp <- maaslin2_results%>% rename (familyID = feature) %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(pval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+```
+
+This volcano plot has a weird shape (maybe something went wrong). 
+
+
+
+
+
+
+##Antismash 
+
+```{r}
+big_map_results_rpkm <- read_csv("../bgc_detection/output/run1/big_map_mapping/csv-results/BiG-MAP.map.results.RPKM.csv")
+
+View(big_map_results_rpkm)
+
+```
+
+
+Data preprocess
+```{r}
+#Rename the columns 
+big_map_results_rpkm <- big_map_results_rpkm %>% rename_with(.cols = contains("DRUP"), .fn = function(x) {str_replace(x, pattern = "-clean", "")})
+
+big_map_results_rpkm <- big_map_results_rpkm %>% mutate (cluster_type = str_replace(gene_clusters, "--OS.*", ""), .after = 1) %>% mutate (cluster_type = str_replace (cluster_type, ".*=", ""))
+
+big_map_results_rpkm %>% group_by(cluster_type) %>% summarise (n = n()) %>% arrange (desc(n))
+
+
+
+```
+
+###UMAP for the RPKM abundances
+```{r}
+#Filter for remote homology
+abundance_bgc <- big_map_results_rpkm %>% column_to_rownames("gene_clusters") %>% select (contains ("DRUP")) %>% as.matrix() %>% t() %>% clr()
+
+
+umap_abundance <- umap (as.matrix(abundance_bgc))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Timepoint
+umap_plot2 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = timepoint)) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Batch
+umap_plot3 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Batch)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Tumor_type
+umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = tumor_type)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Clinical Benefit
+umap_plot7 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = CB)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+umap_plot1
+umap_plot2
+umap_plot3
+umap_plot4
+umap_plot5
+umap_plot6
+umap_plot7
+
+
+
+#Umap with line joining patients at different timepoints colured depending on the antibiotic use. 
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use %in% c("Yes", "Unknown")), "Antibioitic / unknown use", "no_antibiotic_use"))
+
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = TRUE, aes (shape = timepoint, color = ATB_use)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+
+```
+The UMAPS don't show agrupation of the patiends depending on their responds, however they show of the samples with ATB use together. 
+
+###Limma
+Differential abundance analysis for the bgc detected. 
+```{r}
+
+
+big_map_results_rpkm_matrix <- big_map_results_rpkm %>%
+  mutate (mean = (big_map_results_rpkm %>% select(contains( "DRUP")) %>% rowMeans()), .after = 2 ) %>%  filter (mean > 15) %>% column_to_rownames(var = "gene_clusters") %>%  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use + patientId ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("DRUP")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+
+
+
+```
+```{r}
+top.table
+```
+
+```{r}
+
+big_map_results_rpkm_group <- big_map_results_rpkm %>% group_by (cluster_type) %>% summarise_if(is_numeric, sum)
+
+
+big_map_results_rpkm %>% group_by (cluster_type) %>% summarise_if(is_numeric, sum) %>%
+  mutate (mean = (. %>% select(contains( "DRUP")) %>% rowMeans()), .after = 2 )
+
+big_map_results_rpkm %>% filter (cluster_type == "terpene") %>% View()
+
+
+```
+
+```{r}
+
+#Definition of the data frame with the grouping
+big_map_results_rpkm_group <- big_map_results_rpkm %>% group_by (cluster_type) %>% summarise_if(is_numeric, sum)
+
+big_map_results_rpkm_matrix <- big_map_results_rpkm_group %>%
+  mutate (mean = (big_map_results_rpkm_group %>% select(contains( "DRUP")) %>% rowMeans()), .after = 2 ) %>%
+  filter (mean > 50) %>% column_to_rownames(var = "cluster_type") %>%
+  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use + patientId ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("DRUP")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "cluster_id") %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+  geom_point(size = 2/5) +
+    geom_text_repel(data = . %>% filter (P.Value < 0.05), aes ())
+  
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+
+
+```
+```{r}
+top.table
+```
+
+
+
+
+
+
+##Antismash all samples (only bgcs first clusters)
+
+```{r}
+big_map_results_rpkm <- read_csv("../bgc_detection/output/run2/big_map_mapping/csv-results/BiG-MAP.map.results.RPKM.csv")
+
+View(big_map_results_rpkm)
+
+```
+
+
+Data preprocess
+```{r}
+#Rename the columns 
+big_map_results_rpkm <- big_map_results_rpkm %>% rename_with(.cols = contains("DRUP"), .fn = function(x) {str_replace(x, pattern = "-clean", "")})
+
+## Add cluster_type column
+big_map_results_rpkm <- big_map_results_rpkm %>% mutate (cluster_type = str_replace(gene_clusters, "--OS.*", ""), .after = 1) %>% mutate (cluster_type = str_replace (cluster_type, ".*=", ""))
+
+big_map_results_rpkm %>% group_by(cluster_type) %>% summarise (n = n()) %>% arrange (desc(n))
+
+
+
+```
+
+###UMAP for the RPKM abundances
+```{r}
+#Filter for remote homology
+abundance_bgc <- big_map_results_rpkm %>% column_to_rownames("gene_clusters") %>% select (contains ("DRUP")) %>% as.matrix() %>% t() %>% clr()
+
+
+umap_abundance <- umap (as.matrix(abundance_bgc))
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Timepoint
+umap_plot2 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = timepoint)) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Batch
+umap_plot3 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Batch)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Tumor_type
+umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = tumor_type)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Clinical Benefit
+umap_plot7 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = CB)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+umap_plot1
+umap_plot2
+umap_plot3
+umap_plot4
+umap_plot5
+umap_plot6
+umap_plot7
+
+
+
+#Umap with line joining patients at different timepoints colured depending on the antibiotic use. 
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use %in% c("Yes", "Unknown")), "Antibioitic / unknown use", "no_antibiotic_use"))
+
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = TRUE, aes (shape = timepoint, color = ATB_use)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+
+```
+The UMAPS don't show agrupation of the patiends depending on their responds, however they show of the samples with ATB use together. 
+
+###Limma
+Differential abundance analysis for the bgc detected. 
+```{r}
+
+
+big_map_results_rpkm_matrix <- big_map_results_rpkm %>%
+  mutate (mean = (big_map_results_rpkm %>% select(contains( "DRUP")) %>% rowMeans()), .after = 2 ) %>%  filter (mean > 15) %>% column_to_rownames(var = "gene_clusters") %>%  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use + patientId ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("DRUP")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+
+
+
+```
+```{r}
+top.table
+```
+
+
+###Group by clusters type: 
+```{r}
+
+#Definition of the data frame with the grouping
+big_map_results_rpkm_group <- big_map_results_rpkm %>% group_by (cluster_type) %>% summarise_if(is_numeric, sum)
+
+## Add column of prevalence: 
+big_map_results_rpkm_group["prevalence"] <- rowSums (big_map_results_rpkm_group %>% select (contains ("DRUP")) > 0) / (dim (big_map_results_rpkm_group)[2] -1)
+
+
+big_map_results_rpkm_matrix <- big_map_results_rpkm_group %>%
+  mutate (mean = (big_map_results_rpkm_group %>% select(contains( "DRUP")) %>% rowMeans()), .after = 2 ) %>%
+  filter (mean > 50 & prevalence > 0.3) %>% column_to_rownames(var = "cluster_type") %>%
+  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use + patientId ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("DRUP")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "cluster_id") %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+  geom_point(size = 2/5) +
+    geom_text_repel(data = . %>% filter (P.Value < 0.05), aes ())+
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+
+
+```
+
+
+
+
+```{r}
+top.table
+big_map_results_rpkm_group
+```
+
+
+
+
+
+
+```{r}
+
+big_map_results_rpkm_group %>% select (cluster_type, prevalence)
+
+```
+
+
+
+
+
+
+##Antismash all samples
+
+```{r}
+big_map_results_rpkm <- read_csv("../bgc_detection/output/run3/big_map_mapping/csv-results/BiG-MAP.map.results.RPKM.csv")
+
+View(big_map_results_rpkm)
+
+path_plots_antismash <- "../plots/antismash/"
+```
+
+
+Data preprocess
+```{r}
+#Rename the columns 
+big_map_results_rpkm <- big_map_results_rpkm %>% rename_with(.cols = contains("DRUP"), .fn = function(x) {str_replace(x, pattern = "-clean", "")})
+
+## Add cluster_type column
+big_map_results_rpkm <- big_map_results_rpkm %>% mutate (cluster_type = str_replace(gene_clusters, "--OS.*", ""), .after = 1) %>% mutate (cluster_type = str_replace (cluster_type, ".*=", ""))
+
+big_map_results_rpkm %>% group_by(cluster_type) %>% summarise (n = n()) %>% arrange (desc(n))
+
+
+
+```
+
+###UMAP for the RPKM abundances
+```{r}
+#Filter for remote homology
+abundance_bgc <- big_map_results_rpkm %>% column_to_rownames("gene_clusters") %>% select (contains ("DRUP")) %>% as.matrix() %>% t() %>% clr()
+
+set.seed(5)
+umap_abundance <- umap (as.matrix(abundance_bgc), preserve.seed = TRUE)
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#Response
+umap_plot1 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Timepoint
+umap_plot2 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = timepoint)) +
+  #ggtitle ("UMAP protein clusters abundance")
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Batch
+umap_plot3 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Batch)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#Tumor_type
+umap_plot4 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = tumor_type)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Patient ID
+umap_plot5 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point(aes (color = patientId), show.legend = FALSE) +
+  geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = patientId), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+
+#Antibiotics use
+umap_plot6 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#BOR
+umap_plot7 <- umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = BOR)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16)) +
+  scale_color_manual(values = c("PD" = "red", "PR" = "lightblue3", "CR" = "green", "SD" = "orange"))
+
+
+umap_plot1
+umap_plot2
+umap_plot3
+umap_plot4
+umap_plot5
+umap_plot6
+umap_plot7
+
+
+#Umap with line joining patients at different timepoints colured depending on the antibiotic use. 
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use %in% c("Yes", "Unknown")), "Antibioitic / unknown use", "no_antibiotic_use"))
+
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = TRUE, aes (shape = timepoint, color = ATB_use)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+
+```
+
+
+
+```{r}
+
+#Responders with lines joining the two timepoints and clusters depending on the response
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  stat_ellipse(data = (umap_df %>% filter (Response == "Responder")), aes(color = Response), linetype = "dashed") +
+  stat_ellipse(data = (umap_df %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+ggsave ("umap_response_lines_elipses.png", path = path_plots_antismash, width = 6, height = 4)
+
+
+
+
+#UMAP responders
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  # stat_ellipse(data = (umap_df %>% filter (Response == "Responder")), aes(color = Response), linetype = "dashed") +
+  # stat_ellipse(data = (umap_df %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+ggsave ("umap_response_lines.png", path = path_plots_antismash, width = 6, height = 4)
+
+
+#Umap with line joining patients at different timepoints colured depending on the antibiotic use. 
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use %in% c("Yes", "Unknown")), "Antibioitic / unknown use", "no_antibiotic_use"))
+
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = TRUE, aes (shape = timepoint, color = ATB_use)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+ggsave ("umap_atb_lines.png", path = path_plots_antismash, width = 6, height = 4)
+
+
+
+```
+
+
+T1 and T2 UMAPs
+```{r}
+
+#T1
+abundance_bgc <- big_map_results_rpkm %>% column_to_rownames("gene_clusters") %>% select (contains ("DRUP") & contains("T1")) %>% as.matrix() %>% t() %>% clr()
+
+set.seed(5)
+umap_abundance <- umap (as.matrix(abundance_bgc), preserve.seed = TRUE)
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+
+
+#UMAP responders
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#UMAP atb_use
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use, shape = timepoint)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = BOR)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16)) +
+  scale_color_manual(values = c("PD" = "red", "PR" = "lightblue3", "CR" = "green", "SD" = "orange"))
+
+
+
+
+#T2 UMAPS
+abundance_bgc <- big_map_results_rpkm %>% column_to_rownames("gene_clusters") %>% select (contains ("DRUP") & contains("T2")) %>% as.matrix() %>% t() %>% clr()
+
+set.seed(5)
+umap_abundance <- umap (as.matrix(abundance_bgc), preserve.seed = TRUE)
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+
+
+#UMAP responders
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#UMAP atb_use
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = ATB_use, shape = timepoint)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = BOR)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16)) +
+  scale_color_manual(values = c("PD" = "red", "PR" = "lightblue3", "CR" = "green", "SD" = "orange"))
+
+
+
+
+###Clustering removing the samples treated with antibiotics
+
+#Filter for remote homology
+abundance_bgc <- big_map_results_rpkm %>% column_to_rownames("gene_clusters") %>% select (final_metadata %>% filter (ATB_use == "No") %>% pull(Sample)) %>% as.matrix() %>% t() %>% clr()
+
+set.seed(5)
+umap_abundance <- umap (as.matrix(abundance_bgc), preserve.seed = TRUE)
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+#UMAP responders
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  # stat_ellipse(data = (umap_df %>% filter (Response == "Responder")), aes(color = Response), linetype = "dashed") +
+  # stat_ellipse(data = (umap_df %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+ggsave ("umap_response_lines.png", path = path_plots_antismash, width = 6, height = 4)
+
+
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = BOR)) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16)) +
+  scale_color_manual(values = c("PD" = "red", "PR" = "lightblue3", "CR" = "green", "SD" = "orange"))
+
+
+```
+
+###Heatmap
+
+```{r}
+
+#Heatmap of all predicted bgc. 
+big_map_results_rpkm_longer <- abundance_bgc %>% t() %>% as_tibble() %>% add_column(gene_clusters =colnames(abundance_bgc)) %>%
+pivot_longer (cols = contains ("DRUP"), names_to = "Sample", values_to = "rpkm") %>% 
+left_join(., final_metadata %>% select (Sample, Response, timepoint, BOR))
+
+
+#Construction of the heatmap (filtering only for T1 samples)
+big_map_results_rpkm_longer %>%
+heatmap (gene_clusters, Sample, rpkm,
+         #scale = "row",
+         show_row_dend = FALSE,
+         # show_column_dend = FALSE,
+         show_column_names = FALSE,
+         show_row_names = FALSE,
+         #palette_grouping = list(c ("black", "grey30")),
+         heatmap_width = unit(10, "npc"),
+       heatmap_height = unit (15, "npc")) %>% 
+  #split_columns(2) %>% 
+annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+annotation_tile (Response)   %>% 
+  as_ComplexHeatmap() %>%
+  ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+
+
+#Using raw data
+big_map_results_rpkm_longer <- abundance_bgc %>% t() %>% as_tibble() %>% add_column(gene_clusters =colnames(abundance_bgc)) %>%
+pivot_longer (cols = contains ("DRUP"), names_to = "Sample", values_to = "rpkm") %>% 
+left_join(., final_metadata %>% select (Sample, Response, timepoint, BOR))
+
+
+#Construction of the heatmap (filtering only for T1 samples)
+big_map_results_rpkm_longer %>%
+heatmap (gene_clusters, Sample, rpkm,
+         scale = "row",
+         show_row_dend = FALSE,
+         # show_column_dend = FALSE,
+         show_column_names = FALSE,
+         show_row_names = FALSE,
+         #palette_grouping = list(c ("black", "grey30")),
+         heatmap_width = unit(10, "npc"),
+         heatmap_height = unit (15, "npc")) %>% 
+annotation_tile (timepoint , palette = c ("turquoise", "olivedrab")) %>%
+annotation_tile (BOR)
+# as_ComplexHeatmap() %>%
+#   ComplexHeatmap::draw(heatmap_legend_side = "bottom" , annotation_legend_side="bottom")
+```
+
+
+
+
+
+
+###Limma
+
+#### ~ response + tumor_type + ATB_use + patientId
+Differential abundance analysis for the bgc detected. 
+```{r}
+
+##Filter the clusters
+big_map_results_rpkm_matrix <- big_map_results_rpkm %>%
+  mutate (mean = (big_map_results_rpkm %>% select(contains( "DRUP")) %>% rowMeans()), prevalence = rowSums (big_map_results_rpkm %>% select (contains ("DRUP")) > 0) / (dim (big_map_results_rpkm %>% select (contains("DRUP")))[2]),.after = 2 ) %>%  filter (mean > 40 & prevalence > 0.4) %>% column_to_rownames(var = "gene_clusters") %>%  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use + patientId + timepoint ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("DRUP")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+
+
+
+```
+```{r}
+big_map_results_rpkm %>% select (contains ("DRUP")) %>% colSums()
+```
+
+
+
+#### T1
+Differential abundance analysis for the bgc detected. 
+```{r}
+
+##Filter the clusters
+big_map_results_rpkm_matrix <- big_map_results_rpkm %>% select (-contains ("T2")) %>% 
+  mutate (mean = (big_map_results_rpkm %>% select(contains( "DRUP")) %>% rowMeans()), prevalence = rowSums (big_map_results_rpkm %>% select (contains ("DRUP")) > 0) / (dim (big_map_results_rpkm %>% select (contains("DRUP")))[2]),.after = 2 ) %>%  filter (mean > 40 & prevalence > 0.4) %>% column_to_rownames(var = "gene_clusters") %>%  select(contains( "T1")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("T1")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point() +
+    geom_point (size = 6/5,data = . %>% filter (adj.P.Val < 0.1 & logFC > 1), aes(color = cluster_type, size = 2/5)) +
+    geom_point (size = 6/5, data = . %>% filter (adj.P.Val < 0.1 & logFC < -1), aes(color = cluster_type, size = 2/5))+
+    theme_bw() +
+    theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  #geom_text_repel(data = . %>% filter (adj.P.Val < 0.1), aes(label = cluster_type))+
+    ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T1)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) +
+  geom_hline (yintercept = -log(0.1, 10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+top.table_t1 <- top.table
+
+ggsave ("volcano_limma_T1_response_tumor_type_atb_use.png", path = path_plots_antismash, width = 8, height = 4)
+
+
+vp <- top.table %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) +
+  geom_hline (yintercept = -log(0.1, 10), linetype = "dashed", alpha = 0.3)  + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+
+write_tsv (top.table %>% rownames_to_column(var = "ID") , "./R_objects/antismash_bgc_DA_T1.tsv")
+
+
+
+
+
+
+
+```
+
+
+```{r}
+top.table %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type))
+```
+
+
+
+
+
+#### T2
+Differential abundance analysis for the bgc detected. 
+```{r}
+
+##Filter the clusters
+big_map_results_rpkm_matrix <- big_map_results_rpkm %>% select (-contains ("T1")) %>% 
+  mutate (mean = (big_map_results_rpkm %>% select(contains( "DRUP")) %>% rowMeans()), prevalence = rowSums (big_map_results_rpkm %>% select (contains ("DRUP")) > 0) / (dim (big_map_results_rpkm %>% select (contains("DRUP")))[2]),.after = 2 ) %>%  filter (mean > 40 & prevalence > 0.4) %>% column_to_rownames(var = "gene_clusters") %>%  select(contains( "T2")) %>% as.matrix()
+ 
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("T2")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table_t2 <- top.table
+
+vp <- top.table %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point() +
+    geom_point (size = 6/5,data = . %>% filter (adj.P.Val < 0.1 & logFC > 1), aes(color = cluster_type, size = 2/5)) +
+    geom_point (size = 6/5, data = . %>% filter (adj.P.Val < 0.1 & logFC < -1), aes(color = cluster_type, size = 2/5))+
+    theme_bw() +
+    theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  #geom_text_repel(data = . %>% filter (adj.P.Val < 0.1), aes(label = cluster_type), max.overlaps = Inf)+
+    ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders at T2)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) +
+  geom_hline (yintercept = -log(0.1, 10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+
+vp
+
+ggsave ("volcano_limma_T2_response_tumor_type_atb_use.png", path = path_plots_antismash, width = 9, height = 4)
+
+
+vp <- top.table %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type)) %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) +
+  geom_hline (yintercept = -log(0.1, 10), linetype = "dashed", alpha = 0.3)  + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+
+write_tsv (top.table %>% rownames_to_column(var = "ID"), "./R_objects/antismash_bgc_DA_T2.tsv")
+
+
+```
+```{r}
+top.table %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type))
+
+top.table_t1$timepoint <- rep("T1", dim(top.table_t1)[1])
+top.table_t2$timepoint <- rep("T2", dim(top.table_t2)[1])
+
+top.table_t1 <- top.table_t1 %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type))
+
+top.table_t2 <- top.table_t2 %>% rownames_to_column(var = "gene_clusters") %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type))
+
+
+bind_rows(top.table_t1, top.table_t2) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 0.8 ) +
+    geom_point (size = 1.5, data = . %>% filter (adj.P.Val < 0.1 & logFC > 1), aes(color = cluster_type)) +
+    geom_point (size = 1.5,  data = . %>% filter (adj.P.Val < 0.1 & logFC < -1), aes(color = cluster_type))+
+    theme_bw() +
+    theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  #geom_text_repel(data = . %>% filter (adj.P.Val < 0.1), aes(label = cluster_type), max.overlaps = Inf)+
+    ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) +
+  geom_hline (yintercept = -log(0.1, 10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3) +
+  facet_grid(.~timepoint)
+
+ggsave ("volcano_limma_T1-T2_response_tumor_type_atb_use.png", path = path_plots_antismash, width = 12, height = 4)
+
+
+
+vp
+
+```
+
+
+
+#### Maaslin2
+
+```{r}
+
+big_map_results_rpkm_t <- big_map_results_rpkm %>% column_to_rownames(var = "gene_clusters") %>% select (contains ("DRUP")) %>% as.matrix() %>% t() %>% as.tibble(rownames = "Sample")
+
+
+Maaslin2(
+  input_data = big_map_results_rpkm_t,
+  input_metadata = final_metadata,
+  output = "./maaslin2.7_antismash",
+  min_prevalence = 0.3 ,
+  normalization = "TSS",
+  transform = "LOG",
+  cores = 8,
+  random_effects = c ("timepoint", "patientId"),
+  fixed_effects = c ( "Response", "tumor_type", "ATB_use"),
+  reference = c ("Response,Responder")
+  )
+
+
+```
+
+
+```{r}
+maaslin2_results <- read_tsv("./maaslin2.7_antismash/all_results.tsv")
+maaslin2_results <- maaslin2_results %>% filter (metadata == "Response")
+
+maaslin2_results$qval<-p.adjust(maaslin2_results$pval, method = 'BH') # FDR correction using 'BH'
+
+## Addition of LogFC column (necessary to add pseudocounts)
+big_map_results_rpkm$mean_abun_responders <- big_map_results_rpkm %>% select (final_metadata %>% filter (Response == "Responder") %>% pull(Sample)) %>% rowMeans()
+big_map_results_rpkm$mean_abun_non_responders <- big_map_results_rpkm %>% select (final_metadata %>% filter (Response == "Non-responder") %>% pull(Sample)) %>% rowMeans()
+
+big_map_results_rpkm <- big_map_results_rpkm %>% mutate (logFC = log ((mean_abun_non_responders+0.0001)/(mean_abun_responders+0.0001)))
+
+
+# maaslin2_results %>% arrange (pval)
+# homology_abun_per_sample3 %>% filter (familyID == "Cluster_312846") %>% select (-contains ("DRUP"))
+
+vp <- maaslin2_results%>% rename (gene_clusters = feature) %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10))) +
+    geom_point(size = 2/5) +
+    theme_bw()
+    
+vp
+
+
+vp <- maaslin2_results%>% rename (gene_clusters = feature) %>% left_join(., big_map_results_rpkm %>% select (gene_clusters, cluster_type, logFC)) %>% 
+  ggplot (aes (x = logFC, y = -log(qval,10)))  +
+    geom_point(size = 2/5) +
+    geom_point (data = . %>% filter (qval < 0.05 & logFC > 1), color = "red", size = 2/5, show.legend = FALSE) +
+  geom_point (data = . %>% filter (qval < 0.05 & logFC < -1), color = "red", size = 2/5, show.legend = FALSE) +
+    theme_bw() +
+  theme (
+    text = element_text(size = 14), 
+    panel.border = element_rect(color = "black"), 
+    panel.grid = element_blank(),
+  )+
+  ylab("-log10(Adj.P.Val)") +
+  xlab ("logFC (Non-responders/Responders)")+
+  geom_hline (yintercept = -log(0.05,10), linetype = "dashed", alpha = 0.3) + 
+  geom_vline( xintercept = -1, linetype = "dashed", alpha = 0.3)+
+  geom_vline( xintercept = 1, linetype = "dashed", alpha = 0.3)
+vp
+
+#ggsave("Maaslin2_response_tumortype_atb_use.png", path = path_plots, height = 4, width = 6)
 
 
 
@@ -2381,6 +5736,329 @@ heatmap_df %>% replace_na (list (denovo_signaling = "No", denovo_transmembrane =
 
 
 
+###Group by clusters type: 
+
+
+Create the groups: 
+```{r}
+#Definition of the data frame with the grouping
+big_map_results_rpkm_group <- big_map_results_rpkm %>% group_by (cluster_type) %>% summarise_if(is_numeric, sum)
+
+big_map_results_rpkm_group <- big_map_results_rpkm_group %>% left_join (., (big_map_results_rpkm %>% group_by(cluster_type) %>% summarise (n = n()))) %>% relocate(n, .after = 1)
+```
+
+
+```{r}
+big_map_results_rpkm_group %>% select (cluster_type, n) %>% mutate (per = round(n*100/sum(n),2)) %>% arrange (desc(n))%>% filter (!str_detect(cluster_type, ":"))
+
+big_map_results_rpkm_group %>% mutate (mean_abun = rowMeans(big_map_results_rpkm_group %>% select (contains ("DRUP")))) %>% mutate (per_mean = round(mean_abun*100/sum(mean_abun),2), per = round(n*100/sum(n),2)) %>% select (cluster_type, n, per, per_mean) %>% arrange (desc(n)) %>% View()
+
+
+
+###Add the dual clustes individually to each individual group. 
+big_map_results_rpkm_group <- big_map_results_rpkm_group %>% filter (str_detect(cluster_type, ":", negate = TRUE)) %>% 
+  bind_rows(.,(
+    big_map_results_rpkm_group %>% filter (str_detect(cluster_type, ":" )) %>% mutate(cluster_type = str_replace(cluster_type, ":.*", ""))
+)) %>% 
+  bind_rows (., (
+    big_map_results_rpkm_group %>% filter (str_detect(cluster_type, ":" )) %>% mutate(cluster_type = str_replace(cluster_type, ".*:", ""))
+  )) %>%
+  group_by(cluster_type) %>% summarise_if(is_numeric, sum)
+  
+```
+
+```{r}
+
+
+#Filter for remote homology
+abundance_bgc <- big_map_results_rpkm_group %>% column_to_rownames("cluster_type") %>% select (contains ("DRUP")) %>% as.matrix() %>% t() %>% clr()
+
+
+umap_abundance <- umap (as.matrix(abundance_bgc), preserve.seed = TRUE)
+
+umap_df <- umap_abundance$layout %>% as_tibble() %>%  rename("UMAP1"="V1", "UMAP2"="V2") %>% add_column (Sample = rownames (umap_abundance$layout), .before = 1) %>% inner_join(., (final_metadata %>% select (c("Sample", "Response", "patientId", "timepoint", "Batch", "tumor_type", "BOR", "CB", "ATB_use") ))) 
+
+umap_mean_sample <- umap_df %>% group_by(patientId) %>% summarise (x = mean(UMAP1), y = mean (UMAP2)) %>% mutate (, Id_num = as.numeric(factor (.$patientId)))
+umap_df <- umap_df %>% left_join (., umap_mean_sample)
+
+
+
+
+#Responders with lines joining the two timepoints and clusters depending on the response
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  stat_ellipse(data = (umap_df %>% filter (Response == "Responder")), aes(color = Response), linetype = "dashed") +
+  stat_ellipse(data = (umap_df %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+#UMAP responders
+umap_df %>% ggplot (aes (x = UMAP1, y = UMAP2)) + geom_point( aes (color = Response, shape = timepoint)) +
+  #xlab (paste0("UMAP1 (",round(100 * pca_abundance$sdev[1] ** 2 / sum (pca_abundance$sdev **2), 2),"%)"))+
+  #ylab (paste0("UMAP2 (",round(100 * pca_abundance$sdev[2] ** 2 / sum (pca_abundance$sdev **2), 2),"%)")) +
+  #ggtitle ("UMAP protein clusters abundance")
+  # stat_ellipse(data = (umap_df %>% filter (Response == "Responder")), aes(color = Response), linetype = "dashed") +
+  # stat_ellipse(data = (umap_df %>% filter (Response == "Non-responder")), aes(color = Response), linetype = "dashed") +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = Response), show.legend = FALSE, alpha = 0.4) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+
+
+#Umap with line joining patients at different timepoints colured depending on the antibiotic use. 
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use %in% c("Yes", "Unknown")), "Antibioitic / unknown use", "no_antibiotic_use"))
+
+ATB_use_sample <- umap_df %>% group_by(patientId) %>% summarize (ATB_use_sample = ifelse(any (ATB_use == "Yes"), "Yes", ifelse(any (ATB_use == "Unknown"), "Unknown", "No")))
+
+#Patient ID
+umap_df %>% left_join(.,ATB_use_sample) %>%  ggplot (aes (x = UMAP1, y = UMAP2)) + 
+  geom_point( show.legend = TRUE, aes (shape = timepoint, color = ATB_use)) +
+  #geom_text_repel(data = umap_mean_sample, aes (x = x, y = y, label = Id_num), size = 3) +
+  #geom_point (aes (x = x, y = y, color = patientId), show.legend = FALSE) +
+  geom_segment(aes(x = x, y = y, xend = UMAP1, yend = UMAP2, color = ATB_use_sample), alpha = 0.8) +
+  theme_bw() + theme( panel.grid.major = element_blank(), panel.grid.minor = element_blank(), text = element_text(size = 16))
+  #theme(text = element_text(size=12))
+
+
+```
+
+
+
+#### ~ response + tumor_type + ATB_use + timepoint + patientId
+```{r}
+
+
+## Filter the clusters by prevalence and mean: 
+big_map_results_rpkm_matrix <- big_map_results_rpkm_group %>%
+  mutate (
+    mean = (big_map_results_rpkm_group %>% select(contains( "DRUP")) %>% rowMeans()),
+    prevalence = rowSums (big_map_results_rpkm_group %>% select (contains ("DRUP")) > 0 ) / (dim(big_map_results_rpkm_group)[2] -1),
+    .after = 2 ) %>%
+  filter (mean > 50 & prevalence > 0.5) %>% filter (str_detect(cluster_type, ":", negate = TRUE )) %>% column_to_rownames(var = "cluster_type") %>%
+  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+  
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use + timepoint + patientId,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("DRUP")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point(size = 2/5) +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "cluster_id") %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+  geom_point(size = 2/5) +
+    geom_text_repel(data = . %>% filter (P.Value < 0.1), aes (label = cluster_id))+
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+
+
+```
+
+
+
+
+#### T1 only 
+```{r}
+
+## Filter the clusters by prevalence and mean: 
+big_map_results_rpkm_matrix <- big_map_results_rpkm_group %>%
+  select (-contains ("T2")) %>% 
+  mutate (
+    mean = (big_map_results_rpkm_group %>% select(contains( "DRUP")) %>% rowMeans()),
+    prevalence = rowSums (big_map_results_rpkm_group %>% select (contains ("DRUP")) > 0 ) / (dim(big_map_results_rpkm_group)[2] -1),
+    .after = 2 ) %>%
+  filter (mean > 50 & prevalence > 0.5) %>% filter (str_detect(cluster_type, ":", negate = TRUE )) %>% column_to_rownames(var = "cluster_type") %>%
+  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("T1")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf, adjust.method = "fdr")
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "cluster_id") %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point() +
+  geom_text_repel(data = . %>% filter (logFC > 0.5 |logFC < -0.5), aes (label = cluster_id))+
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "cluster_id") %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+  geom_point() +
+    geom_text_repel(data = . %>% filter (logFC > 0.5 |logFC < -0.5), aes (label = cluster_id))+
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+write_tsv (top.table %>% rownames_to_column(var = "ID"), "./R_objects/antismash_bgc_clusters_DA_T1.tsv")
+
+
+```
+
+
+#### T2 only 
+```{r}
+
+## Filter the clusters by prevalence and mean: 
+big_map_results_rpkm_matrix <- big_map_results_rpkm_group %>%
+  select (-contains ("T1")) %>% 
+  mutate (
+    mean = (big_map_results_rpkm_group %>% select(contains( "DRUP")) %>% rowMeans()),
+    prevalence = rowSums (big_map_results_rpkm_group %>% select (contains ("DRUP")) > 0 ) / (dim(big_map_results_rpkm_group)[2] -1),
+    .after = 1 ) %>%
+  filter (mean > 50 & prevalence > 0.5) %>%  filter (str_detect(cluster_type, ":", negate = TRUE )) %>% column_to_rownames(var = "cluster_type") %>%
+  select(contains( "DRUP")) %>% as.matrix()
+ 
+
+
+
+#model matrix
+mm <- model.matrix (~0 + Response + tumor_type + ATB_use ,  data = (final_metadata %>% filter (Sample %in% (big_map_results_rpkm %>% select (contains ("T2")) %>% colnames())) %>% mutate (Response = make.names(Response), tumor_type = make.names(tumor_type))))
+
+
+
+#Voom modeling of the data
+y <- voom (big_map_results_rpkm_matrix, mm, plot = T )
+
+#Fitting of the model with Limma
+fit <- lmFit(y, mm)
+
+head (coef(fit))
+
+contr <- makeContrasts(ResponseNon.responder - ResponseResponder, levels = colnames(coef(fit)))
+#contr <- makeContrasts(response_group_T1Responder - response_group_T1Non.responder, levels = colnames(coef(fit)))
+
+#fitting of the contrast
+tmp <- contrasts.fit (fit , contr)
+
+#Empirical Bayes smoothing of standard errors 
+tmp <- eBayes (tmp)
+
+top.table <- topTable (tmp, sort.by = "P", n = Inf)
+
+top.table
+
+vp <- top.table %>% rownames_to_column(var = "familyID") %>% left_join(., homology_abun_per_sample3 %>% select (familyID, protein_name)) %>% 
+  ggplot (aes (x = logFC, y = -log(adj.P.Val,10))) +
+    geom_point() +
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+vp <- top.table %>% rownames_to_column(var = "cluster_id") %>% 
+  ggplot (aes (x = logFC, y = -log(P.Value,10))) +
+  geom_point() +
+  geom_text_repel(data = . %>% filter (logFC > 0.5 |logFC < -0.5), aes (label = cluster_id))+
+    theme_bw() +
+  geom_hline (yintercept = -log(0.05,10)) +
+  geom_hline (yintercept = -log(0.1, 10)) + 
+  geom_hline (yintercept = -log( 0.25, 10))
+vp
+
+
+write_tsv (top.table %>% rownames_to_column(var = "ID"), "./R_objects/antismash_bgc_clusters_DA_T2.tsv" )
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+final_metadata %>% filter (timepoint == "T1") %>% group_by(tumor_type) %>% summarise (n = n(), per = round(100*n()/76, 2)) %>% arrange(desc(n)) %>% write_csv(., "R_objects/tumor_type_number.csv")
+
+
+final_metadata %>% filter(timepoint == "T1") %>% group_by (Response) %>% summarise (n = n())
+final_metadata %>% filter(timepoint == "T2") %>% group_by (Response) %>% summarise (n = n())
+
+
+
+drup_metadata %>% filter (timepoint == "T3")
+
+
+final_metadata %>% filter (timepoint == "T1") %>% group_by(tumor_type) %>% summarise (n = n(), per = round(100*n()/76, 2), nR = sum(Response == "Responder"), nNR = sum(Response =="Non-responder")) %>% arrange(desc(n))
+
+
+final_metadata %>% filter (timepoint == "T1") %>% group_by(tumor_groups) %>% summarise (n = n())
+
+homology_abun_per_sample3 %>% filter (n_proteins > 1) %>% mutate (n_proteins = as.numeric(n_proteins)) %>% select (familyID, n_proteins) %>% summary()
+
+homology_abun_per_sample3 %>% filter (homology == "NH") %>% pull(prevalence) %>% median()
+homology_abun_per_sample3 %>% select (familyID, prevalence)
+
+```
 
 
 
