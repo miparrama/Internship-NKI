@@ -8,6 +8,7 @@ __Duration:__ Sept 2022 - Feb 2022
 
 __Author:__ Miguel Parra Martínez <br>
 __Internship Supervisor:__ Dr. Lodewyk Wessels <br>
+__Daily Supervisor:__ Thomas Battaglia <br>
 __Masters Program:__ MSc Bioinformatics and Systems Biology (Vrije Universiteit van Amsterdam & University of Amsterdam) <br>
 __Host Institute:__ Netherlands Cancer Institute <br>
 __Research Group:__ Computational cancer biology <br>
