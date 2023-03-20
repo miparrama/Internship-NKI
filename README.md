@@ -19,6 +19,6 @@ The development of immunotherapy has revolutionized the treatment of cancer, lea
 
 The following workflow was followed in the project research: 
 
-![workflow](https://github.com/miparrama/Internship-NKI/edit/master/workflow.png)
+![workflow](https://github.com/miparrama/Internship-NKI/edit/master/workflow.png?raw=true)
 
 
