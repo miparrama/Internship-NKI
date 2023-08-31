@@ -1,7 +1,7 @@
 # Functional characterization of the microbiota in MSI-H patients treated with ICI
 
 __Masters Research Internship__  <br>
-__Duration:__ Sept 2022 - Feb 2022 
+__Duration:__ Sept 2022 - Feb 2023 
 <br>
 
 
